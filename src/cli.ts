@@ -1,6 +1,7 @@
 import { resolveConfig } from "./config.js";
 import { installHermesPlugin } from "./git-install.js";
 import { listHermesPlugins } from "./hermes-python.js";
+import { startHermesMcpServer } from "./mcp-server.js";
 
 type CliCommand = {
   description(text: string): CliCommand;
@@ -36,5 +37,9 @@ export function registerHermesPluginCli(program: CliCommand, pluginConfig?: Reco
   root.command("list").description("List installed Hermes plugins").action(async () => {
     const config = resolveConfig(pluginConfig);
     console.log(JSON.stringify(await listHermesPlugins(config), null, 2));
+  });
+
+  root.command("mcp").description("Start an MCP stdio server for installed Hermes tools").action(async () => {
+    await startHermesMcpServer(resolveConfig(pluginConfig));
   });
 }

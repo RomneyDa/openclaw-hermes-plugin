@@ -10,6 +10,17 @@ It exposes a fixed OpenClaw surface:
 | `hermes_tool_call` | Call a Hermes tool registered with `ctx.register_tool(...)`. |
 | `hermes_plugin_install` | Clone a Hermes plugin Git repo into the bridge install directory. |
 
+It also exposes a stdio MCP server:
+
+```bash
+openclaw hermes-plugin mcp
+```
+
+That server maps every installed Hermes `ctx.register_tool(...)` tool into MCP
+`tools/list` and routes MCP `tools/call` back to the Python plugin. Unique
+Hermes tool names stay unchanged. Colliding names become
+`<plugin>__<tool>`.
+
 ## Why tools are wrapped
 
 Hermes plugins register arbitrary Python tool names at runtime. OpenClaw plugin manifests require static tool ownership before plugin code loads, so this bridge cannot safely expose every Hermes tool as a first-class OpenClaw tool after install. It uses `hermes_tool_call` as the stable OpenClaw tool and passes `{ plugin, tool, args }` to the Python plugin.
@@ -68,7 +79,11 @@ The Python environment must be able to import whatever the Hermes plugin imports
 ```bash
 openclaw hermes-plugin install https://github.com/owner/hermes-plugin-example.git
 openclaw hermes-plugin list
+openclaw hermes-plugin mcp
 ```
+
+Add it to an MCP client as a stdio server whose command is `openclaw` and args
+are `["hermes-plugin", "mcp"]`.
 
 ## Tool calls
 
