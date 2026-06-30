@@ -218,7 +218,16 @@ def _load_plugin(plugin_dir: Path) -> tuple[dict[str, Any], RecordingContext]:
     if parent not in sys.path:
         sys.path.insert(0, parent)
 
-    module_name = f"openclaw_hermes_plugins.{key.replace('-', '_').replace('.', '_')}"
+    parent_name = "openclaw_hermes_plugins"
+    parent_module = sys.modules.get(parent_name)
+    if parent_module is None:
+        import types
+
+        parent_module = types.ModuleType(parent_name)
+        parent_module.__path__ = [str(plugin_dir.parent)]  # type: ignore[attr-defined]
+        sys.modules[parent_name] = parent_module
+
+    module_name = f"{parent_name}.{key.replace('-', '_').replace('.', '_')}"
     spec = importlib.util.spec_from_file_location(
         module_name,
         plugin_dir / "__init__.py",

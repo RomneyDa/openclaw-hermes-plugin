@@ -8,6 +8,11 @@ async function copyFixture(target: string): Promise<void> {
   await fs.cp(fixture, path.join(target, "simple"), { recursive: true });
 }
 
+async function copyRelativeFixture(target: string): Promise<void> {
+  const fixture = path.join(process.cwd(), "test/fixtures/relative-hermes-plugin");
+  await fs.cp(fixture, path.join(target, "relative"), { recursive: true });
+}
+
 describe("Hermes Python bridge", () => {
   it("lists and calls a Hermes register(ctx) tool", async () => {
     const installDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hermes-plugin-"));
@@ -32,5 +37,28 @@ describe("Hermes Python bridge", () => {
       args: { value: "ok" },
     });
     expect(called.parsedResult).toEqual({ echo: "ok" });
+  });
+
+  it("loads Hermes plugins that use package-relative imports", async () => {
+    const installDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hermes-plugin-"));
+    await copyRelativeFixture(installDir);
+
+    const config = {
+      installDir,
+      python: "python3",
+      timeoutMs: 10000,
+      env: {},
+    };
+
+    const listed = await listHermesPlugins(config);
+    expect(listed.plugins[0]?.error).toBeUndefined();
+    expect(listed.plugins[0]?.tools.map((tool) => tool.name)).toEqual(["relative_echo"]);
+
+    const called = await callHermesTool(config, {
+      plugin: "relative",
+      tool: "relative_echo",
+      args: { value: "ok" },
+    });
+    expect(called.result).toEqual({ echo: "ok" });
   });
 });
