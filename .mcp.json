@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "hermes": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/dist/bin.js", "mcp"],
+      "transport": "stdio"
+    }
+  }
+}

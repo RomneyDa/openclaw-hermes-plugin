@@ -1,35 +1,24 @@
 # OpenClaw Hermes Plugin Bridge
 
-OpenClaw plugin that installs and calls Hermes Agent Python plugins.
+OpenClaw bundle that exposes installed Hermes Agent Python plugin tools through
+OpenClaw's existing bundle-MCP support.
 
-It exposes a fixed OpenClaw surface:
+After this package is installed and enabled as an OpenClaw plugin bundle,
+OpenClaw automatically launches the bundled MCP server during agent turns. You
+do not need to start a separate server command.
 
-| Tool | Purpose |
+## What Maps
+
+| Hermes surface | OpenClaw behavior |
 | --- | --- |
-| `hermes_plugins_list` | Show installed Hermes plugins, tools, hooks, commands, skills, and unsupported surfaces. |
-| `hermes_tool_call` | Call a Hermes tool registered with `ctx.register_tool(...)`. |
-| `hermes_plugin_install` | Clone a Hermes plugin Git repo into the bridge install directory. |
+| `ctx.register_tool(...)` | Exposed as MCP tools through OpenClaw `bundle-mcp`. |
+| Tool JSON schemas | Passed through to MCP `tools/list` when Hermes provides a schema. |
+| Tool calls | Routed back to the Python Hermes plugin callable. |
+| Hooks, middleware, commands, skills | Listed by the bridge for inspection, not executed natively. |
+| Provider/platform/dashboard/native host surfaces | Reported as unsupported. |
 
-It also exposes a stdio MCP server:
-
-```bash
-openclaw hermes-plugin mcp
-```
-
-That server maps every installed Hermes `ctx.register_tool(...)` tool into MCP
-`tools/list` and routes MCP `tools/call` back to the Python plugin. Unique
-Hermes tool names stay unchanged. Colliding names become
+Unique Hermes tool names stay unchanged. Colliding names become
 `<plugin>__<tool>`.
-
-## Why tools are wrapped
-
-Hermes plugins register arbitrary Python tool names at runtime. OpenClaw plugin manifests require static tool ownership before plugin code loads, so this bridge cannot safely expose every Hermes tool as a first-class OpenClaw tool after install. It uses `hermes_tool_call` as the stable OpenClaw tool and passes `{ plugin, tool, args }` to the Python plugin.
-
-Mapped:
-
-- `ctx.register_tool(...)` -> callable through `hermes_tool_call`
-- `ctx.register_hook(...)`, `ctx.register_middleware(...)`, commands, skills -> listed for inspection
-- provider/platform/dashboard/native host registrations -> reported as `unsupported`
 
 ## Install
 
@@ -39,32 +28,47 @@ npm run build
 openclaw plugins install --link .
 ```
 
-Enable the bridge and allow its optional tools for the agent that should use it:
+Then enable the bundle:
 
 ```jsonc
 {
-  "agents": {
-    "list": [
-      {
-        "id": "main",
-        "tools": {
-          "alsoAllow": [
-            "hermes_plugins_list",
-            "hermes_tool_call",
-            "hermes_plugin_install"
-          ]
-        }
-      }
-    ]
-  },
   "plugins": {
     "entries": {
       "hermes-plugin": {
-        "enabled": true,
-        "config": {
-          "installDir": "~/.openclaw/hermes-plugins",
-          "python": "python3",
-          "timeoutMs": 120000
+        "enabled": true
+      }
+    }
+  }
+}
+```
+
+OpenClaw loads the MCP server from `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "hermes": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/dist/bin.js", "mcp"],
+      "transport": "stdio"
+    }
+  }
+}
+```
+
+The default Hermes plugin install directory is
+`~/.openclaw/hermes-plugins`. The default Python executable is `python3`.
+Override them through MCP server env config if needed:
+
+```jsonc
+{
+  "mcp": {
+    "servers": {
+      "hermes": {
+        "env": {
+          "OPENCLAW_HERMES_PLUGIN_DIR": "/path/to/hermes-plugins",
+          "OPENCLAW_HERMES_PYTHON": "/path/to/python3",
+          "OPENCLAW_HERMES_TIMEOUT_MS": "120000"
         }
       }
     }
@@ -72,40 +76,18 @@ Enable the bridge and allow its optional tools for the agent that should use it:
 }
 ```
 
-The Python environment must be able to import whatever the Hermes plugin imports. For plugins that use Hermes internals, install `hermes-agent` in the selected Python environment.
+The Python environment must be able to import whatever each Hermes plugin
+imports. For plugins that import Hermes internals, install `hermes-agent` in the
+selected Python environment.
 
 ## CLI
 
+The bundled binary is still useful for local diagnostics:
+
 ```bash
-openclaw hermes-plugin install https://github.com/owner/hermes-plugin-example.git
-openclaw hermes-plugin list
-openclaw hermes-plugin mcp
-```
-
-Add it to an MCP client as a stdio server whose command is `openclaw` and args
-are `["hermes-plugin", "mcp"]`.
-
-## Tool calls
-
-Install from an agent:
-
-```json
-{
-  "source": "https://github.com/owner/hermes-plugin-example.git",
-  "name": "example"
-}
-```
-
-Call a Hermes tool:
-
-```json
-{
-  "plugin": "example",
-  "tool": "example_search",
-  "args": {
-    "query": "openclaw"
-  }
-}
+openclaw-hermes-plugin install https://github.com/owner/hermes-plugin-example.git
+openclaw-hermes-plugin list
+openclaw-hermes-plugin mcp
 ```
 
 ## Checks

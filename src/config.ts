@@ -40,7 +40,10 @@ export function defaultInstallDir(): string {
 }
 
 export function resolveConfig(raw: Record<string, unknown> | undefined): HermesBridgeConfig {
-  const timeout = typeof raw?.timeoutMs === "number" ? Math.trunc(raw.timeoutMs) : 120000;
+  const timeout =
+    typeof raw?.timeoutMs === "number"
+      ? Math.trunc(raw.timeoutMs)
+      : Number.parseInt(process.env.OPENCLAW_HERMES_TIMEOUT_MS ?? "", 10) || 120000;
   const installDir =
     readString(raw?.installDir) ?? process.env.OPENCLAW_HERMES_PLUGIN_DIR ?? defaultInstallDir();
   return {

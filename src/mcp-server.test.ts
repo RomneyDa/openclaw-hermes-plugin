@@ -92,7 +92,11 @@ describe("Hermes MCP server", () => {
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
     try {
       const tools = await client.listTools();
-      expect(tools.tools.map((tool) => tool.name)).toEqual(["simple_echo"]);
+      expect(tools.tools.map((tool) => tool.name)).toEqual([
+        "hermes_plugins_list",
+        "hermes_plugin_install",
+        "simple_echo",
+      ]);
 
       const result = await client.callTool({
         name: "simple_echo",

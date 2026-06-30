@@ -3,43 +3,56 @@ import { installHermesPlugin } from "./git-install.js";
 import { listHermesPlugins } from "./hermes-python.js";
 import { startHermesMcpServer } from "./mcp-server.js";
 
-type CliCommand = {
-  description(text: string): CliCommand;
-  argument(name: string, description: string): CliCommand;
-  option(flags: string, description: string): CliCommand;
-  action(handler: (...args: unknown[]) => void | Promise<void>): CliCommand;
-  command(name: string): CliCommand;
-};
+function readOptionValue(args: string[], name: string): string | undefined {
+  const index = args.indexOf(name);
+  if (index < 0) {
+    return undefined;
+  }
+  const value = args[index + 1];
+  return value && !value.startsWith("--") ? value : undefined;
+}
 
-export function registerHermesPluginCli(program: CliCommand, pluginConfig?: Record<string, unknown>): void {
-  const root = program
-    .command("hermes-plugin")
-    .description("Install and inspect Hermes Agent Python plugins for the OpenClaw bridge");
+function usage(): string {
+  return [
+    "Usage:",
+    "  openclaw-hermes-plugin mcp",
+    "  openclaw-hermes-plugin list",
+    "  openclaw-hermes-plugin install <source> [--name <name>] [--force]",
+  ].join("\n");
+}
 
-  root
-    .command("install")
-    .argument("<source>", "Git URL or cloneable source")
-    .option("--name <name>", "Install directory name")
-    .option("--force", "Replace an existing install")
-    .action(async (source, opts) => {
-      const sourceText = typeof source === "string" ? source : "";
-      const options = opts && typeof opts === "object" ? (opts as Record<string, unknown>) : {};
-      const config = resolveConfig(pluginConfig);
-      const result = await installHermesPlugin({
-        installDir: config.installDir,
-        source: sourceText,
-        name: typeof options.name === "string" ? options.name : undefined,
-        force: options.force === true,
-      });
-      console.log(JSON.stringify(result, null, 2));
-    });
+export async function runHermesPluginCli(args: string[]): Promise<void> {
+  const command = args[0];
+  if (!command || command === "-h" || command === "--help") {
+    console.log(usage());
+    return;
+  }
 
-  root.command("list").description("List installed Hermes plugins").action(async () => {
-    const config = resolveConfig(pluginConfig);
+  const config = resolveConfig(undefined);
+  if (command === "mcp") {
+    await startHermesMcpServer(config);
+    return;
+  }
+
+  if (command === "list") {
     console.log(JSON.stringify(await listHermesPlugins(config), null, 2));
-  });
+    return;
+  }
 
-  root.command("mcp").description("Start an MCP stdio server for installed Hermes tools").action(async () => {
-    await startHermesMcpServer(resolveConfig(pluginConfig));
-  });
+  if (command === "install") {
+    const source = args[1];
+    if (!source || source.startsWith("--")) {
+      throw new Error(usage());
+    }
+    const result = await installHermesPlugin({
+      installDir: config.installDir,
+      source,
+      name: readOptionValue(args, "--name"),
+      force: args.includes("--force"),
+    });
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  throw new Error(usage());
 }

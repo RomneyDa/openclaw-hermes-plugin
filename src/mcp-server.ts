@@ -7,7 +7,13 @@ import {
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 import type { HermesBridgeConfig } from "./config.js";
-import { callHermesTool, listHermesPlugins, type HermesListResult, type HermesToolSummary } from "./hermes-python.js";
+import { installHermesPlugin } from "./git-install.js";
+import {
+  callHermesTool,
+  listHermesPlugins,
+  type HermesListResult,
+  type HermesToolSummary,
+} from "./hermes-python.js";
 
 export type HermesMcpToolRoute = {
   plugin: string;
@@ -20,6 +26,7 @@ export type HermesMcpToolIndex = {
 };
 
 type JsonObject = Record<string, unknown>;
+const BRIDGE_TOOL_NAMES = new Set(["hermes_plugins_list", "hermes_plugin_install"]);
 
 function asObject(value: unknown): JsonObject | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -53,10 +60,34 @@ function mcpToolName(params: {
   tool: string;
   duplicates: Set<string>;
 }): string {
-  if (!params.duplicates.has(params.tool)) {
+  if (!params.duplicates.has(params.tool) && !BRIDGE_TOOL_NAMES.has(params.tool)) {
     return params.tool;
   }
   return `${sanitizeName(params.plugin)}__${sanitizeName(params.tool)}`;
+}
+
+function bridgeTools(): Tool[] {
+  return [
+    {
+      name: "hermes_plugins_list",
+      description: "List installed Hermes Agent Python plugins and their registered surfaces.",
+      inputSchema: { type: "object", additionalProperties: false },
+    },
+    {
+      name: "hermes_plugin_install",
+      description: "Install a Hermes Agent Python plugin Git repository into the bridge directory.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          source: { type: "string", description: "Git URL or local cloneable source." },
+          name: { type: "string", description: "Optional install directory name." },
+          force: { type: "boolean", description: "Replace an existing install." },
+        },
+        required: ["source"],
+      },
+    },
+  ];
 }
 
 export function buildHermesMcpToolIndex(list: HermesListResult): HermesMcpToolIndex {
@@ -105,17 +136,45 @@ export function createHermesMcpServer(config: HermesBridgeConfig): Server {
     { name: "openclaw-hermes-plugin", version: "0.1.0" },
     {
       capabilities: {
-        tools: { listChanged: false },
+        tools: { listChanged: true },
       },
     },
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     const index = buildHermesMcpToolIndex(await listHermesPlugins(config));
-    return { tools: index.tools };
+    return { tools: [...bridgeTools(), ...index.tools] };
   });
 
   server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
+    if (request.params.name === "hermes_plugins_list") {
+      return {
+        content: [{ type: "text", text: stringifyResult(await listHermesPlugins(config)) }],
+      };
+    }
+
+    if (request.params.name === "hermes_plugin_install") {
+      const args = asObject(request.params.arguments) ?? {};
+      const source = typeof args.source === "string" ? args.source.trim() : "";
+      if (!source) {
+        return {
+          isError: true,
+          content: [{ type: "text", text: "source is required" }],
+        };
+      }
+      const result = await installHermesPlugin({
+        installDir: config.installDir,
+        source,
+        name: typeof args.name === "string" ? args.name : undefined,
+        force: args.force === true,
+      });
+      await server.sendToolListChanged();
+      return {
+        content: [{ type: "text", text: stringifyResult(result) }],
+        structuredContent: result,
+      };
+    }
+
     const list = await listHermesPlugins(config);
     const index = buildHermesMcpToolIndex(list);
     const route = index.routes.get(request.params.name);
