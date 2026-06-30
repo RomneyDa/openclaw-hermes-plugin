@@ -14,7 +14,9 @@ do not need to start a separate server command.
 | `ctx.register_tool(...)` | Exposed as MCP tools through OpenClaw `bundle-mcp`. |
 | Tool JSON schemas | Passed through to MCP `tools/list` when Hermes provides a schema. |
 | Tool calls | Routed back to the Python Hermes plugin callable. |
-| Hooks, middleware, commands, skills | Listed by the bridge for inspection, not executed natively. |
+| `ctx.register_command(...)` | Exposed as MCP tools named `hermes_command__<plugin>__<command>`. |
+| `ctx.register_skill(...)` | Exposed as MCP prompts/resources and through `hermes_skill_read`. |
+| Hooks and middleware | Listed by the bridge for inspection, not executed natively. |
 | Provider/platform/dashboard/native host surfaces | Reported as unsupported. |
 
 Unique Hermes tool names stay unchanged. Colliding names become

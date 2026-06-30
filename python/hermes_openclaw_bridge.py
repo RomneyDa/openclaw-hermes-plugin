@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import inspect
 import json
 import os
 import sys
@@ -105,15 +106,64 @@ class ToolRecord:
             return False
 
 
+@dataclass
+class CommandRecord:
+    name: str
+    handler: Callable[..., Any] | None
+    description: str = ""
+    args_hint: str = ""
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "description": self.description,
+            "argsHint": self.args_hint,
+            "available": self.handler is not None,
+        }
+
+
+@dataclass
+class SkillRecord:
+    name: str
+    path: Path
+    description: str = ""
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "description": self.description,
+            "path": str(self.path),
+            "available": self._content_path() is not None,
+        }
+
+    def _content_path(self) -> Path | None:
+        if self.path.is_file():
+            return self.path
+        if not self.path.is_dir():
+            return None
+        for name in ("SKILL.md", "README.md", f"{self.name}.md"):
+            candidate = self.path / name
+            if candidate.is_file():
+                return candidate
+        return None
+
+    def read_text(self) -> str:
+        content_path = self._content_path()
+        if content_path is None:
+            raise RuntimeError(f"Hermes skill '{self.name}' has no readable content file")
+        return content_path.read_text(encoding="utf-8")
+
+
 class RecordingContext:
-    def __init__(self, manifest: dict[str, Any], key: str):
+    def __init__(self, manifest: dict[str, Any], key: str, plugin_dir: Path):
         self.manifest = manifest
         self.key = key
+        self.plugin_dir = plugin_dir
         self.tools: list[ToolRecord] = []
         self.hooks: list[str] = []
         self.middleware: list[str] = []
-        self.commands: list[str] = []
-        self.skills: list[str] = []
+        self.commands: list[CommandRecord] = []
+        self.skills: list[SkillRecord] = []
         self.unsupported: list[str] = []
 
     @property
@@ -162,8 +212,7 @@ class RecordingContext:
         description: str = "",
         args_hint: str = "",
     ) -> None:
-        del handler, description, args_hint
-        self.commands.append(name.lstrip("/"))
+        self.commands.append(CommandRecord(name.lstrip("/"), handler, description, args_hint))
 
     def register_cli_command(
         self,
@@ -173,12 +222,20 @@ class RecordingContext:
         handler_fn: Callable[..., Any] | None = None,
         description: str = "",
     ) -> None:
-        del help, setup_fn, handler_fn, description
-        self.commands.append(name)
+        del setup_fn
+        self.commands.append(CommandRecord(name, handler_fn, description or help))
 
     def register_skill(self, name: str, path: Path, description: str = "") -> None:
-        del path, description
-        self.skills.append(name)
+        resolved = Path(path)
+        if not resolved.is_absolute():
+            resolved = self.plugin_dir / resolved
+        resolved = resolved.resolve()
+        try:
+            resolved.relative_to(self.plugin_dir)
+        except ValueError:
+            self.unsupported.append(f"skill_outside_plugin:{name}")
+            return
+        self.skills.append(SkillRecord(name, resolved, description))
 
     def register_auxiliary_task(self, key: str, **_: Any) -> None:
         self.unsupported.append(f"auxiliary_task:{key}")
@@ -212,7 +269,7 @@ def _plugin_dirs(install_dir: Path) -> list[Path]:
 def _load_plugin(plugin_dir: Path) -> tuple[dict[str, Any], RecordingContext]:
     manifest = _load_yaml(plugin_dir / "plugin.yaml")
     key = plugin_dir.name
-    ctx = RecordingContext(manifest, key)
+    ctx = RecordingContext(manifest, key, plugin_dir.resolve())
 
     parent = str(plugin_dir.parent)
     if parent not in sys.path:
@@ -258,8 +315,8 @@ def _summarize_plugin(plugin_dir: Path) -> dict[str, Any]:
             "tools": [tool.summary() for tool in ctx.tools],
             "hooks": sorted(set(ctx.hooks)),
             "middleware": sorted(set(ctx.middleware)),
-            "commands": sorted(set(ctx.commands)),
-            "skills": sorted(set(ctx.skills)),
+            "commands": sorted([command.summary() for command in ctx.commands], key=lambda item: item["name"]),
+            "skills": sorted([skill.summary() for skill in ctx.skills], key=lambda item: item["name"]),
             "unsupported": sorted(set(ctx.unsupported)),
         }
     except Exception as exc:
@@ -288,16 +345,41 @@ def _list(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _plugin_matches(plugin_dir: Path, wanted_plugin: Any) -> bool:
+    if not wanted_plugin:
+        return True
+    if wanted_plugin in {plugin_dir.name}:
+        return True
+    manifest = _load_yaml(plugin_dir / "plugin.yaml")
+    return wanted_plugin in {manifest.get("name"), manifest.get("key")}
+
+
+def _invoke(handler: Callable[..., Any], arg: Any) -> Any:
+    required = [
+        param
+        for param in inspect.signature(handler).parameters.values()
+        if param.default is inspect.Parameter.empty
+        and param.kind
+        in {
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        }
+    ]
+    result = handler() if not required else handler(arg)
+    if inspect.isawaitable(result):
+        return asyncio.run(result)
+    return result
+
+
 def _call(payload: dict[str, Any]) -> dict[str, Any]:
     wanted_plugin = payload.get("plugin")
     wanted_tool = str(payload["tool"])
     matches: list[tuple[Path, ToolRecord]] = []
 
     for plugin_dir in _plugin_dirs(Path(str(payload["installDir"])).expanduser().resolve()):
-        if wanted_plugin and wanted_plugin not in {plugin_dir.name}:
-            manifest = _load_yaml(plugin_dir / "plugin.yaml")
-            if wanted_plugin not in {manifest.get("name"), manifest.get("key")}:
-                continue
+        if not _plugin_matches(plugin_dir, wanted_plugin):
+            continue
         _manifest, ctx = _load_plugin(plugin_dir)
         for tool in ctx.tools:
             if tool.name == wanted_tool:
@@ -316,10 +398,7 @@ def _call(payload: dict[str, Any]) -> dict[str, Any]:
     args = payload.get("args")
     if not isinstance(args, dict):
         args = {}
-    if tool.is_async:
-        result = asyncio.run(tool.handler(args))
-    else:
-        result = tool.handler(args)
+    result = _invoke(tool.handler, args)
 
     response: dict[str, Any] = {
         "plugin": plugin_dir.name,
@@ -334,6 +413,65 @@ def _call(payload: dict[str, Any]) -> dict[str, Any]:
     return response
 
 
+def _command(payload: dict[str, Any]) -> dict[str, Any]:
+    wanted_plugin = payload.get("plugin")
+    wanted_command = str(payload["command"]).lstrip("/")
+    matches: list[tuple[Path, CommandRecord]] = []
+
+    for plugin_dir in _plugin_dirs(Path(str(payload["installDir"])).expanduser().resolve()):
+        if not _plugin_matches(plugin_dir, wanted_plugin):
+            continue
+        _manifest, ctx = _load_plugin(plugin_dir)
+        for command in ctx.commands:
+            if command.name == wanted_command:
+                matches.append((plugin_dir, command))
+
+    if not matches:
+        raise RuntimeError(f"Hermes command not found: {wanted_command}")
+    if len(matches) > 1 and not wanted_plugin:
+        names = ", ".join(plugin_dir.name for plugin_dir, _command in matches)
+        raise RuntimeError(f"Hermes command '{wanted_command}' is ambiguous. Specify plugin. Matches: {names}")
+
+    plugin_dir, command = matches[0]
+    if command.handler is None:
+        raise RuntimeError(f"Hermes command '{wanted_command}' has no callable handler.")
+
+    result = _invoke(command.handler, payload.get("args", ""))
+    return {
+        "plugin": plugin_dir.name,
+        "command": command.name,
+        "result": _jsonable(result),
+    }
+
+
+def _skill(payload: dict[str, Any]) -> dict[str, Any]:
+    wanted_plugin = payload.get("plugin")
+    wanted_skill = str(payload["skill"])
+    matches: list[tuple[Path, SkillRecord]] = []
+
+    for plugin_dir in _plugin_dirs(Path(str(payload["installDir"])).expanduser().resolve()):
+        if not _plugin_matches(plugin_dir, wanted_plugin):
+            continue
+        _manifest, ctx = _load_plugin(plugin_dir)
+        for skill in ctx.skills:
+            if skill.name == wanted_skill:
+                matches.append((plugin_dir, skill))
+
+    if not matches:
+        raise RuntimeError(f"Hermes skill not found: {wanted_skill}")
+    if len(matches) > 1 and not wanted_plugin:
+        names = ", ".join(plugin_dir.name for plugin_dir, _skill in matches)
+        raise RuntimeError(f"Hermes skill '{wanted_skill}' is ambiguous. Specify plugin. Matches: {names}")
+
+    plugin_dir, skill = matches[0]
+    return {
+        "plugin": plugin_dir.name,
+        "skill": skill.name,
+        "description": skill.description,
+        "text": skill.read_text(),
+    }
+
+
 def main() -> int:
     try:
         payload = json.loads(sys.stdin.read() or "{}")
@@ -342,6 +480,10 @@ def main() -> int:
             result = _list(payload)
         elif op == "call":
             result = _call(payload)
+        elif op == "command":
+            result = _command(payload)
+        elif op == "skill":
+            result = _skill(payload)
         else:
             raise RuntimeError(f"Unknown operation: {op}")
         print(json.dumps(result, ensure_ascii=False))

@@ -14,6 +14,20 @@ export type HermesToolSummary = {
   available: boolean;
 };
 
+export type HermesCommandSummary = {
+  name: string;
+  description: string;
+  argsHint: string;
+  available: boolean;
+};
+
+export type HermesSkillSummary = {
+  name: string;
+  description: string;
+  path: string;
+  available: boolean;
+};
+
 export type HermesPluginSummary = {
   key: string;
   name: string;
@@ -23,8 +37,8 @@ export type HermesPluginSummary = {
   tools: HermesToolSummary[];
   hooks: string[];
   middleware: string[];
-  commands: string[];
-  skills: string[];
+  commands: HermesCommandSummary[];
+  skills: HermesSkillSummary[];
   unsupported: string[];
   error?: string;
 };
@@ -41,9 +55,24 @@ export type HermesCallResult = {
   parsedResult?: unknown;
 };
 
+export type HermesCommandResult = {
+  plugin: string;
+  command: string;
+  result: unknown;
+};
+
+export type HermesSkillResult = {
+  plugin: string;
+  skill: string;
+  description: string;
+  text: string;
+};
+
 type BridgeRequest =
   | { op: "list"; installDir: string }
-  | { op: "call"; installDir: string; plugin?: string; tool: string; args: unknown };
+  | { op: "call"; installDir: string; plugin?: string; tool: string; args: unknown }
+  | { op: "command"; installDir: string; plugin?: string; command: string; args: unknown }
+  | { op: "skill"; installDir: string; plugin?: string; skill: string };
 
 function runHelper<T>(config: HermesBridgeConfig, request: BridgeRequest): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -102,5 +131,30 @@ export function callHermesTool(
     plugin: params.plugin,
     tool: params.tool,
     args: params.args,
+  });
+}
+
+export function callHermesCommand(
+  config: HermesBridgeConfig,
+  params: { plugin?: string; command: string; args: unknown },
+): Promise<HermesCommandResult> {
+  return runHelper(config, {
+    op: "command",
+    installDir: config.installDir,
+    plugin: params.plugin,
+    command: params.command,
+    args: params.args,
+  });
+}
+
+export function readHermesSkill(
+  config: HermesBridgeConfig,
+  params: { plugin?: string; skill: string },
+): Promise<HermesSkillResult> {
+  return runHelper(config, {
+    op: "skill",
+    installDir: config.installDir,
+    plugin: params.plugin,
+    skill: params.skill,
   });
 }

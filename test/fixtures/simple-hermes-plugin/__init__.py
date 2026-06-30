@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 
 ECHO_SCHEMA = {
@@ -28,4 +29,5 @@ def register(ctx):
         handler=_echo,
     )
     ctx.register_hook("post_tool_call", _hook)
-    ctx.register_command("simple", lambda raw: raw)
+    ctx.register_command("simple", lambda raw: {"command": raw})
+    ctx.register_skill("simple_skill", Path("skills/simple.md"), "Simple skill fixture")

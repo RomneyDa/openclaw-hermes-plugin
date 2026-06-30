@@ -1,7 +1,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { callHermesTool, listHermesPlugins } from "./hermes-python.js";
+import {
+  callHermesCommand,
+  callHermesTool,
+  listHermesPlugins,
+  readHermesSkill,
+} from "./hermes-python.js";
 
 async function copyFixture(target: string): Promise<void> {
   const fixture = path.join(process.cwd(), "test/fixtures/simple-hermes-plugin");
@@ -29,7 +34,8 @@ describe("Hermes Python bridge", () => {
     expect(listed.plugins).toHaveLength(1);
     expect(listed.plugins[0]?.tools.map((tool) => tool.name)).toEqual(["simple_echo"]);
     expect(listed.plugins[0]?.hooks).toEqual(["post_tool_call"]);
-    expect(listed.plugins[0]?.commands).toEqual(["simple"]);
+    expect(listed.plugins[0]?.commands.map((command) => command.name)).toEqual(["simple"]);
+    expect(listed.plugins[0]?.skills.map((skill) => skill.name)).toEqual(["simple_skill"]);
 
     const called = await callHermesTool(config, {
       plugin: "simple",
@@ -37,6 +43,18 @@ describe("Hermes Python bridge", () => {
       args: { value: "ok" },
     });
     expect(called.parsedResult).toEqual({ echo: "ok" });
+
+    await expect(
+      callHermesCommand(config, {
+        plugin: "simple",
+        command: "simple",
+        args: "raw",
+      }),
+    ).resolves.toMatchObject({ result: { command: "raw" } });
+
+    await expect(
+      readHermesSkill(config, { plugin: "simple", skill: "simple_skill" }),
+    ).resolves.toMatchObject({ text: expect.stringContaining("Simple Skill") });
   });
 
   it("loads Hermes plugins that use package-relative imports", async () => {
