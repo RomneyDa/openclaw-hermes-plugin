@@ -1,0 +1,63 @@
+{
+  "name": "openclaw-hermes-plugin",
+  "version": "0.1.0",
+  "description": "OpenClaw bridge for Hermes Agent Python plugins",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "files": [
+    "dist/",
+    "python/",
+    "openclaw.plugin.json",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/romneyda/openclaw-hermes-plugin.git"
+  },
+  "bugs": {
+    "url": "https://github.com/romneyda/openclaw-hermes-plugin/issues"
+  },
+  "homepage": "https://github.com/romneyda/openclaw-hermes-plugin#readme",
+  "keywords": [
+    "openclaw",
+    "openclaw-plugin",
+    "hermes",
+    "hermes-agent",
+    "plugins"
+  ],
+  "engines": {
+    "node": ">=22.19"
+  },
+  "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ],
+    "runtimeExtensions": [
+      "./dist/index.js"
+    ]
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "check": "npm run build && npm test",
+    "pack:local": "npm run build && npm pack"
+  },
+  "dependencies": {
+    "typebox": "^1.1.39"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.6.10"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "openclaw": "2026.6.10",
+    "typescript": "^5.9.0",
+    "vitest": "^4.1.4"
+  }
+}
