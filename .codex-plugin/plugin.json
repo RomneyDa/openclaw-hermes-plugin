@@ -1,7 +1,0 @@
-{
-  "name": "Hermes Plugin",
-  "version": "0.1.0",
-  "description": "OpenClaw MCP bridge for Hermes Agent Python plugins.",
-  "skills": "skills",
-  "mcpServers": "./.mcp.json"
-}

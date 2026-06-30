@@ -5,15 +5,17 @@ Input and output are JSON over stdio. This helper intentionally implements the
 smallest Hermes host facade needed by OpenClaw:
 
 - ctx.register_tool(...) is callable through hermes_tool_call.
-- hooks, middleware, commands, and skills are visible in hermes_plugins_list.
+- hooks, middleware, commands, CLI commands, and skills are visible in hermes_plugins_list.
 - provider/platform/dashboard/native registrations are listed as unsupported.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import importlib.util
 import inspect
+import io
 import json
 import os
 import sys
@@ -123,6 +125,51 @@ class CommandRecord:
 
 
 @dataclass
+class CliCommandRecord:
+    name: str
+    help: str
+    setup_fn: Callable[..., Any] | None
+    handler_fn: Callable[..., Any] | None = None
+    description: str = ""
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "description": self.description or self.help,
+            "argsHint": "",
+            "available": self.setup_fn is not None or self.handler_fn is not None,
+        }
+
+
+@dataclass
+class HookRecord:
+    name: str
+    callback: Callable[..., Any]
+
+
+@dataclass
+class MiddlewareRecord:
+    kind: str
+    callback: Callable[..., Any]
+
+
+@dataclass
+class AuxiliaryTaskRecord:
+    key: str
+    display_name: str
+    description: str
+    defaults: dict[str, Any]
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "key": self.key,
+            "displayName": self.display_name,
+            "description": self.description,
+            "defaults": _jsonable(self.defaults),
+        }
+
+
+@dataclass
 class SkillRecord:
     name: str
     path: Path
@@ -160,10 +207,12 @@ class RecordingContext:
         self.key = key
         self.plugin_dir = plugin_dir
         self.tools: list[ToolRecord] = []
-        self.hooks: list[str] = []
-        self.middleware: list[str] = []
+        self.hooks: list[HookRecord] = []
+        self.middleware: list[MiddlewareRecord] = []
         self.commands: list[CommandRecord] = []
+        self.cli_commands: list[CliCommandRecord] = []
         self.skills: list[SkillRecord] = []
+        self.auxiliary_tasks: list[AuxiliaryTaskRecord] = []
         self.unsupported: list[str] = []
 
     @property
@@ -198,12 +247,10 @@ class RecordingContext:
         )
 
     def register_hook(self, hook_name: str, callback: Callable[..., Any]) -> None:
-        del callback
-        self.hooks.append(hook_name)
+        self.hooks.append(HookRecord(hook_name, callback))
 
     def register_middleware(self, kind: str, callback: Callable[..., Any]) -> None:
-        del callback
-        self.middleware.append(kind)
+        self.middleware.append(MiddlewareRecord(kind, callback))
 
     def register_command(
         self,
@@ -222,8 +269,9 @@ class RecordingContext:
         handler_fn: Callable[..., Any] | None = None,
         description: str = "",
     ) -> None:
-        del setup_fn
-        self.commands.append(CommandRecord(name, handler_fn, description or help))
+        self.cli_commands.append(
+            CliCommandRecord(name, help, setup_fn, handler_fn, description or help)
+        )
 
     def register_skill(self, name: str, path: Path, description: str = "") -> None:
         resolved = Path(path)
@@ -237,8 +285,23 @@ class RecordingContext:
             return
         self.skills.append(SkillRecord(name, resolved, description))
 
-    def register_auxiliary_task(self, key: str, **_: Any) -> None:
-        self.unsupported.append(f"auxiliary_task:{key}")
+    def register_auxiliary_task(
+        self,
+        key: str,
+        *,
+        display_name: str = "",
+        description: str = "",
+        defaults: dict[str, Any] | None = None,
+        **_: Any,
+    ) -> None:
+        self.auxiliary_tasks.append(
+            AuxiliaryTaskRecord(
+                key=key,
+                display_name=display_name or key,
+                description=description,
+                defaults=dict(defaults or {}),
+            )
+        )
 
     def __getattr__(self, name: str) -> Callable[..., None]:
         if name.startswith("register_"):
@@ -313,10 +376,15 @@ def _summarize_plugin(plugin_dir: Path) -> dict[str, Any]:
             "description": str(manifest.get("description") or ""),
             "path": str(plugin_dir),
             "tools": [tool.summary() for tool in ctx.tools],
-            "hooks": sorted(set(ctx.hooks)),
-            "middleware": sorted(set(ctx.middleware)),
+            "hooks": sorted({hook.name for hook in ctx.hooks}),
+            "middleware": sorted({middleware.kind for middleware in ctx.middleware}),
             "commands": sorted([command.summary() for command in ctx.commands], key=lambda item: item["name"]),
+            "cliCommands": sorted([command.summary() for command in ctx.cli_commands], key=lambda item: item["name"]),
             "skills": sorted([skill.summary() for skill in ctx.skills], key=lambda item: item["name"]),
+            "auxiliaryTasks": sorted(
+                [task.summary() for task in ctx.auxiliary_tasks],
+                key=lambda item: item["key"],
+            ),
             "unsupported": sorted(set(ctx.unsupported)),
         }
     except Exception as exc:
@@ -331,7 +399,9 @@ def _summarize_plugin(plugin_dir: Path) -> dict[str, Any]:
             "hooks": [],
             "middleware": [],
             "commands": [],
+            "cliCommands": [],
             "skills": [],
+            "auxiliaryTasks": [],
             "unsupported": [],
             "error": f"{type(exc).__name__}: {exc}",
         }
@@ -370,6 +440,47 @@ def _invoke(handler: Callable[..., Any], arg: Any) -> Any:
     if inspect.isawaitable(result):
         return asyncio.run(result)
     return result
+
+
+def _invoke_kwargs(handler: Callable[..., Any], kwargs: dict[str, Any]) -> Any:
+    result = handler(**kwargs)
+    if inspect.isawaitable(result):
+        return asyncio.run(result)
+    return result
+
+
+def _invoke_event_callback(handler: Callable[..., Any], kwargs: dict[str, Any]) -> Any:
+    params = list(inspect.signature(handler).parameters.values())
+    if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in params):
+        return _invoke_kwargs(handler, kwargs)
+
+    keyword_names = {
+        param.name
+        for param in params
+        if param.kind
+        in {
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        }
+    }
+    filtered = {key: value for key, value in kwargs.items() if key in keyword_names}
+    missing_required = [
+        param
+        for param in params
+        if param.default is inspect.Parameter.empty
+        and param.kind
+        in {
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        }
+        and param.name not in filtered
+    ]
+    if not params or not missing_required:
+        return _invoke_kwargs(handler, filtered)
+    if len(params) == 1 and len(missing_required) == 1:
+        return _invoke(handler, kwargs)
+    return _invoke_kwargs(handler, filtered)
 
 
 def _call(payload: dict[str, Any]) -> dict[str, Any]:
@@ -444,6 +555,63 @@ def _command(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _cli_command(payload: dict[str, Any]) -> dict[str, Any]:
+    import argparse
+    import shlex
+
+    wanted_plugin = payload.get("plugin")
+    wanted_command = str(payload["command"]).lstrip("/")
+    matches: list[tuple[Path, CliCommandRecord]] = []
+
+    for plugin_dir in _plugin_dirs(Path(str(payload["installDir"])).expanduser().resolve()):
+        if not _plugin_matches(plugin_dir, wanted_plugin):
+            continue
+        _manifest, ctx = _load_plugin(plugin_dir)
+        for command in ctx.cli_commands:
+            if command.name == wanted_command:
+                matches.append((plugin_dir, command))
+
+    if not matches:
+        raise RuntimeError(f"Hermes CLI command not found: {wanted_command}")
+    if len(matches) > 1 and not wanted_plugin:
+        names = ", ".join(plugin_dir.name for plugin_dir, _command in matches)
+        raise RuntimeError(f"Hermes CLI command '{wanted_command}' is ambiguous. Specify plugin. Matches: {names}")
+
+    plugin_dir, command = matches[0]
+    raw_args = payload.get("args", [])
+    argv = raw_args if isinstance(raw_args, list) else shlex.split(str(raw_args))
+
+    parser = argparse.ArgumentParser(prog=f"openclaw hermes {plugin_dir.name} {command.name}")
+    if command.setup_fn is not None:
+        command.setup_fn(parser)
+    if command.handler_fn is not None:
+        parser.set_defaults(func=command.handler_fn)
+
+    try:
+        namespace = parser.parse_args([str(arg) for arg in argv])
+    except SystemExit as exc:
+        raise RuntimeError(f"Hermes CLI command parse failed with exit code {exc.code}") from exc
+
+    handler = getattr(namespace, "func", None)
+    if not callable(handler):
+        raise RuntimeError(f"Hermes CLI command '{wanted_command}' has no callable handler.")
+
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        result = handler(namespace)
+    if inspect.isawaitable(result):
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            result = asyncio.run(result)
+    return {
+        "plugin": plugin_dir.name,
+        "command": command.name,
+        "result": _jsonable(result),
+        "stdout": stdout.getvalue(),
+        "stderr": stderr.getvalue(),
+    }
+
+
 def _skill(payload: dict[str, Any]) -> dict[str, Any]:
     wanted_plugin = payload.get("plugin")
     wanted_skill = str(payload["skill"])
@@ -472,6 +640,52 @@ def _skill(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _hook(payload: dict[str, Any]) -> dict[str, Any]:
+    hook_name = str(payload["hook"])
+    kwargs = payload.get("kwargs")
+    if not isinstance(kwargs, dict):
+        kwargs = {}
+    context = payload.get("context")
+    if isinstance(context, dict):
+        kwargs = {**context, **kwargs, "openclaw_context": context}
+
+    results: list[Any] = []
+    invoked: list[dict[str, str]] = []
+    for plugin_dir in _plugin_dirs(Path(str(payload["installDir"])).expanduser().resolve()):
+        _manifest, ctx = _load_plugin(plugin_dir)
+        for hook in ctx.hooks:
+            if hook.name != hook_name:
+                continue
+            invoked.append({"plugin": plugin_dir.name, "hook": hook.name})
+            result = _invoke_event_callback(hook.callback, kwargs)
+            if result is not None:
+                results.append(_jsonable(result))
+    return {"hook": hook_name, "invoked": invoked, "results": results}
+
+
+def _middleware(payload: dict[str, Any]) -> dict[str, Any]:
+    kind = str(payload["kind"])
+    kwargs = payload.get("kwargs")
+    if not isinstance(kwargs, dict):
+        kwargs = {}
+    context = payload.get("context")
+    if isinstance(context, dict):
+        kwargs = {**context, **kwargs, "openclaw_context": context}
+
+    results: list[Any] = []
+    invoked: list[dict[str, str]] = []
+    for plugin_dir in _plugin_dirs(Path(str(payload["installDir"])).expanduser().resolve()):
+        _manifest, ctx = _load_plugin(plugin_dir)
+        for middleware in ctx.middleware:
+            if middleware.kind != kind:
+                continue
+            invoked.append({"plugin": plugin_dir.name, "middleware": middleware.kind})
+            result = _invoke_event_callback(middleware.callback, kwargs)
+            if result is not None:
+                results.append(_jsonable(result))
+    return {"middleware": kind, "invoked": invoked, "results": results}
+
+
 def main() -> int:
     try:
         payload = json.loads(sys.stdin.read() or "{}")
@@ -482,8 +696,14 @@ def main() -> int:
             result = _call(payload)
         elif op == "command":
             result = _command(payload)
+        elif op == "cliCommand":
+            result = _cli_command(payload)
         elif op == "skill":
             result = _skill(payload)
+        elif op == "hook":
+            result = _hook(payload)
+        elif op == "middleware":
+            result = _middleware(payload)
         else:
             raise RuntimeError(f"Unknown operation: {op}")
         print(json.dumps(result, ensure_ascii=False))

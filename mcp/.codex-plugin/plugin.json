@@ -1,0 +1,7 @@
+{
+  "name": "Hermes Plugin MCP Alternative",
+  "version": "0.1.0",
+  "description": "Manual MCP bridge for Hermes Agent Python plugins.",
+  "skills": "../skills",
+  "mcpServers": "./.mcp.json"
+}

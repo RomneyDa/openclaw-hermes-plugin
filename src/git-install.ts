@@ -12,6 +12,11 @@ export type InstallHermesPluginParams = {
   force?: boolean;
 };
 
+export type UninstallHermesPluginParams = {
+  installDir: string;
+  name: string;
+};
+
 function repoNameFromSource(source: string): string {
   const clean = source.trim().replace(/[#?].*$/, "").replace(/\/$/, "");
   const last = clean.split(/[/:]/).filter(Boolean).at(-1) ?? "plugin";
@@ -63,5 +68,18 @@ export async function installHermesPlugin({
     maxBuffer: 1024 * 1024,
   });
 
+  return { name: pluginName, path: target };
+}
+
+export async function uninstallHermesPlugin({
+  installDir,
+  name,
+}: UninstallHermesPluginParams): Promise<{ name: string; path: string }> {
+  const pluginName = sanitizePluginName(name);
+  const target = path.join(installDir, pluginName);
+  if (!(await pathExists(target))) {
+    throw new Error(`Hermes plugin '${pluginName}' is not installed.`);
+  }
+  await fs.rm(target, { recursive: true, force: true });
   return { name: pluginName, path: target };
 }

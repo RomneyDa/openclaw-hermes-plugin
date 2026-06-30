@@ -2,8 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  callHermesCliCommand,
   callHermesCommand,
   callHermesTool,
+  invokeHermesHook,
   listHermesPlugins,
   readHermesSkill,
 } from "./hermes-python.js";
@@ -33,14 +35,35 @@ describe("Hermes Python bridge", () => {
     const listed = await listHermesPlugins(config);
     expect(listed.plugins).toHaveLength(1);
     expect(listed.plugins[0]?.tools.map((tool) => tool.name)).toEqual(["simple_echo"]);
-    expect(listed.plugins[0]?.hooks).toEqual(["post_tool_call"]);
-    expect(listed.plugins[0]?.commands.map((command) => command.name)).toEqual(["simple"]);
+    expect(listed.plugins[0]?.hooks).toEqual([
+      "post_tool_call",
+      "pre_llm_call",
+      "pre_tool_call",
+      "transform_tool_result",
+    ]);
+    expect(listed.plugins[0]?.commands).toEqual([
+      {
+        name: "simple",
+        description: "Simple command",
+        argsHint: "<raw text>",
+        available: true,
+      },
+    ]);
+    expect(listed.plugins[0]?.cliCommands).toEqual([
+      {
+        name: "simplecli",
+        description: "Simple CLI command",
+        argsHint: "",
+        available: true,
+      },
+    ]);
     expect(listed.plugins[0]?.skills.map((skill) => skill.name)).toEqual(["simple_skill"]);
 
     const called = await callHermesTool(config, {
       plugin: "simple",
       tool: "simple_echo",
       args: { value: "ok" },
+      context: { sessionId: "session-1" },
     });
     expect(called.parsedResult).toEqual({ echo: "ok" });
 
@@ -53,8 +76,34 @@ describe("Hermes Python bridge", () => {
     ).resolves.toMatchObject({ result: { command: "raw" } });
 
     await expect(
+      callHermesCliCommand(config, {
+        plugin: "simple",
+        command: "simplecli",
+        args: ["from-cli"],
+      }),
+    ).resolves.toMatchObject({ result: { cli: "from-cli" }, stdout: "printed:from-cli\n" });
+
+    await expect(
       readHermesSkill(config, { plugin: "simple", skill: "simple_skill" }),
     ).resolves.toMatchObject({ text: expect.stringContaining("Simple Skill") });
+
+    await expect(
+      invokeHermesHook(config, {
+        hook: "pre_tool_call",
+        kwargs: { tool_name: "blocked" },
+        context: { sessionId: "session-1" },
+      }),
+    ).resolves.toMatchObject({
+      results: [{ args: { value: "rewritten" } }, { action: "block", message: "blocked" }],
+    });
+
+    await expect(
+      invokeHermesHook(config, {
+        hook: "post_tool_call",
+        kwargs: { tool_name: "simple_echo" },
+        context: { sessionId: "session-1" },
+      }),
+    ).resolves.toMatchObject({ results: ["no-arg"] });
   });
 
   it("loads Hermes plugins that use package-relative imports", async () => {

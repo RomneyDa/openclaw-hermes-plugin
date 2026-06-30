@@ -45,15 +45,22 @@ export async function syncHermesSkills(
   rootDir = packageRoot(),
 ): Promise<string[]> {
   const list = await listHermesPlugins(config);
+  const generatedRoot = path.join(rootDir, "skills", "hermes-generated");
+  const desired = new Set<string>();
   const written: string[] = [];
   for (const plugin of list.plugins) {
     for (const skill of plugin.skills) {
       if (!skill.available) {
         continue;
       }
-      const name = `hermes-${slug(plugin.key)}-${slug(skill.name)}`;
+      const baseName = `hermes-${slug(plugin.key)}-${slug(skill.name)}`;
+      let name = baseName;
+      for (let index = 2; desired.has(name); index += 1) {
+        name = `${baseName}-${index}`;
+      }
+      desired.add(name);
       const loaded = await readHermesSkill(config, { plugin: plugin.key, skill: skill.name });
-      const dir = path.join(rootDir, "skills", "hermes-generated", name);
+      const dir = path.join(generatedRoot, name);
       await fs.mkdir(dir, { recursive: true });
       await fs.writeFile(
         path.join(dir, "SKILL.md"),
@@ -67,6 +74,12 @@ export async function syncHermesSkills(
         "utf-8",
       );
       written.push(name);
+    }
+  }
+  await fs.mkdir(generatedRoot, { recursive: true });
+  for (const entry of await fs.readdir(generatedRoot, { withFileTypes: true })) {
+    if (entry.isDirectory() && !desired.has(entry.name)) {
+      await fs.rm(path.join(generatedRoot, entry.name), { recursive: true, force: true });
     }
   }
   return written;

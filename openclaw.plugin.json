@@ -1,0 +1,17 @@
+{
+  "id": "hermes-plugin",
+  "name": "Hermes Plugin",
+  "description": "OpenClaw bridge for Hermes Agent Python plugins.",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "properties": {}
+  },
+  "skills": ["skills"],
+  "contracts": {
+    "tools": ["hermes_plugins_list", "hermes_plugin_install", "hermes_plugin_uninstall"],
+    "agentToolResultMiddleware": ["openclaw", "codex"]
+  }
+}

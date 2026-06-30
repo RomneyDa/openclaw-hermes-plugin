@@ -27,4 +27,29 @@ describe("syncHermesSkills", () => {
     expect(markdown).toContain("name: hermes-simple-simple_skill");
     expect(markdown).toContain("Simple Skill");
   });
+
+  it("removes stale generated skills", async () => {
+    const installDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hermes-skills-"));
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hermes-package-"));
+    const staleDir = path.join(rootDir, "skills", "hermes-generated", "old");
+    await fs.mkdir(staleDir, { recursive: true });
+    await fs.writeFile(path.join(staleDir, "SKILL.md"), "old", "utf-8");
+    await copyFixture(installDir);
+
+    await syncHermesSkills({ installDir, python: "python3", timeoutMs: 10000, env: {} }, rootDir);
+
+    await expect(fs.stat(staleDir)).rejects.toThrow();
+  });
+
+  it("suffixes generated skill slug collisions", async () => {
+    const installDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hermes-skills-"));
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hermes-package-"));
+    const fixture = path.join(process.cwd(), "test/fixtures/simple-hermes-plugin");
+    await fs.cp(fixture, path.join(installDir, "a.b"), { recursive: true });
+    await fs.cp(fixture, path.join(installDir, "a-b"), { recursive: true });
+
+    await expect(
+      syncHermesSkills({ installDir, python: "python3", timeoutMs: 10000, env: {} }, rootDir),
+    ).resolves.toEqual(["hermes-a-b-simple_skill", "hermes-a-b-simple_skill-2"]);
+  });
 });

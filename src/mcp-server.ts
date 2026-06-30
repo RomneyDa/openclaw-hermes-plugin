@@ -15,6 +15,7 @@ import {
   type HermesListResult,
   type HermesToolSummary,
 } from "./hermes-python.js";
+import { regenerateNativeTools } from "./native-tools.js";
 import { syncHermesSkills } from "./skill-sync.js";
 
 export type HermesMcpRoute = {
@@ -29,7 +30,22 @@ export type HermesMcpToolIndex = {
 };
 
 type JsonObject = Record<string, unknown>;
-const BRIDGE_TOOL_NAMES = new Set(["hermes_plugins_list", "hermes_plugin_install"]);
+const BRIDGE_TOOL_NAMES = new Set([
+  "hermes_plugins_list",
+  "hermes_plugin_install",
+  "hermes_task_start",
+  "hermes_task_status",
+  "hermes_task_stop",
+]);
+
+type TaskState =
+  | { id: string; status: "running"; startedAt: number; controller: AbortController }
+  | { id: string; status: "completed"; startedAt: number; finishedAt: number; result: unknown }
+  | { id: string; status: "failed"; startedAt: number; finishedAt: number; error: string }
+  | { id: string; status: "stopped"; startedAt: number; finishedAt: number; error?: string };
+
+const tasks = new Map<string, TaskState>();
+let nextTaskId = 1;
 
 function asObject(value: unknown): JsonObject | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -94,6 +110,41 @@ function bridgeTools(): Tool[] {
         required: ["source"],
       },
     },
+    {
+      name: "hermes_task_start",
+      description: "Run a Hermes tool or command in the background for later polling.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          kind: { type: "string", enum: ["tool", "command"] },
+          plugin: { type: "string" },
+          name: { type: "string" },
+          args: { description: "Arguments passed to the Hermes tool or command." },
+        },
+        required: ["kind", "name"],
+      },
+    },
+    {
+      name: "hermes_task_status",
+      description: "Return the status and result for a Hermes background task.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: { id: { type: "string" } },
+        required: ["id"],
+      },
+    },
+    {
+      name: "hermes_task_stop",
+      description: "Stop a running Hermes background task.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: { id: { type: "string" } },
+        required: ["id"],
+      },
+    },
   ];
 }
 
@@ -109,12 +160,18 @@ function commandTools(list: HermesListResult): { tools: Tool[]; routes: Map<stri
       routes.set(name, { plugin: plugin.key, name: command.name });
       tools.push({
         name,
-        description: command.description || `Run Hermes command ${plugin.key}/${command.name}`,
+        description: [
+          command.description || `Run Hermes command ${plugin.key}/${command.name}`,
+          command.argsHint ? `Args: ${command.argsHint}` : "",
+        ]
+          .filter(Boolean)
+          .join("\n"),
         inputSchema: {
           type: "object",
           additionalProperties: false,
           properties: {
             args: {
+              type: "string",
               description: command.argsHint || "Arguments passed to the Hermes command handler.",
             },
           },
@@ -195,6 +252,91 @@ export function createHermesMcpServer(config: HermesBridgeConfig): Server {
       };
     }
 
+    if (request.params.name === "hermes_task_start") {
+      const args = asObject(request.params.arguments) ?? {};
+      const kind = args.kind === "command" ? "command" : "tool";
+      const name = typeof args.name === "string" ? args.name.trim() : "";
+      if (!name) {
+        return { isError: true, content: [{ type: "text", text: "name is required" }] };
+      }
+      const id = `hermes-task-${nextTaskId++}`;
+      const startedAt = Date.now();
+      const controller = new AbortController();
+      tasks.set(id, { id, status: "running", startedAt, controller });
+      const run =
+        kind === "command"
+          ? callHermesCommand(
+              config,
+              {
+                plugin: typeof args.plugin === "string" ? args.plugin : undefined,
+                command: name,
+                args: args.args ?? "",
+              },
+              { signal: controller.signal },
+            )
+          : callHermesTool(
+              config,
+              {
+                plugin: typeof args.plugin === "string" ? args.plugin : undefined,
+                tool: name,
+                args: args.args ?? {},
+              },
+              { signal: controller.signal },
+            );
+      void run.then(
+        (result) => {
+          if (tasks.get(id)?.status === "running") {
+            tasks.set(id, { id, status: "completed", startedAt, finishedAt: Date.now(), result });
+          }
+        },
+        (error: unknown) => {
+          if (tasks.get(id)?.status === "running") {
+            tasks.set(id, {
+              id,
+              status: "failed",
+              startedAt,
+              finishedAt: Date.now(),
+              error: (error as Error).message,
+            });
+          }
+        },
+      );
+      return {
+        content: [{ type: "text", text: stringifyResult({ id, status: "running" }) }],
+        structuredContent: { id, status: "running" },
+      };
+    }
+
+    if (request.params.name === "hermes_task_status") {
+      const id = String(asObject(request.params.arguments)?.id ?? "");
+      const task = tasks.get(id);
+      if (!task) {
+        return { isError: true, content: [{ type: "text", text: `Unknown Hermes task: ${id}` }] };
+      }
+      const { controller: _controller, ...safeTask } =
+        task.status === "running" ? task : { ...task, controller: undefined };
+      return {
+        content: [{ type: "text", text: stringifyResult(safeTask) }],
+        structuredContent: asObject(safeTask),
+      };
+    }
+
+    if (request.params.name === "hermes_task_stop") {
+      const id = String(asObject(request.params.arguments)?.id ?? "");
+      const task = tasks.get(id);
+      if (!task) {
+        return { isError: true, content: [{ type: "text", text: `Unknown Hermes task: ${id}` }] };
+      }
+      if (task.status === "running") {
+        task.controller.abort();
+        tasks.set(id, { id, status: "stopped", startedAt: task.startedAt, finishedAt: Date.now() });
+      }
+      return {
+        content: [{ type: "text", text: stringifyResult(tasks.get(id)) }],
+        structuredContent: asObject(tasks.get(id)),
+      };
+    }
+
     if (request.params.name === "hermes_plugin_install") {
       const args = asObject(request.params.arguments) ?? {};
       const source = typeof args.source === "string" ? args.source.trim() : "";
@@ -210,11 +352,11 @@ export function createHermesMcpServer(config: HermesBridgeConfig): Server {
         name: typeof args.name === "string" ? args.name : undefined,
         force: args.force === true,
       });
-      await syncHermesSkills(config);
+      const generated = await regenerateNativeTools(config);
       await server.sendToolListChanged();
       return {
-        content: [{ type: "text", text: stringifyResult(result) }],
-        structuredContent: result,
+        content: [{ type: "text", text: stringifyResult({ installed: result, ...generated }) }],
+        structuredContent: { installed: result, ...generated },
       };
     }
 

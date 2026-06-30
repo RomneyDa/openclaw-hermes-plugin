@@ -44,6 +44,7 @@ describe("Hermes MCP server", () => {
           hooks: [],
           middleware: [],
           commands: [],
+          cliCommands: [],
           skills: [],
           unsupported: [],
         },
@@ -67,6 +68,7 @@ describe("Hermes MCP server", () => {
           hooks: [],
           middleware: [],
           commands: [],
+          cliCommands: [],
           skills: [],
           unsupported: [],
         },
@@ -95,9 +97,15 @@ describe("Hermes MCP server", () => {
       expect(tools.tools.map((tool) => tool.name)).toEqual([
         "hermes_plugins_list",
         "hermes_plugin_install",
+        "hermes_task_start",
+        "hermes_task_status",
+        "hermes_task_stop",
         "hermes_command__simple__simple",
         "simple_echo",
       ]);
+      expect(
+        tools.tools.find((tool) => tool.name === "hermes_command__simple__simple")?.description,
+      ).toContain("Args: <raw text>");
 
       const result = await client.callTool({
         name: "simple_echo",
@@ -113,6 +121,24 @@ describe("Hermes MCP server", () => {
       ).resolves.toMatchObject({
         content: [{ type: "text", text: '{\n  "command": "from-command"\n}' }],
       });
+
+      const started = await client.callTool({
+        name: "hermes_task_start",
+        arguments: { kind: "tool", name: "simple_echo", args: { value: "task-ok" } },
+      });
+      const task = JSON.parse(String(started.content?.[0]?.text));
+      expect(task.status).toBe("running");
+
+      let finalStatus = "running";
+      for (let attempt = 0; attempt < 20 && finalStatus === "running"; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        const status = await client.callTool({
+          name: "hermes_task_status",
+          arguments: { id: task.id },
+        });
+        finalStatus = JSON.parse(String(status.content?.[0]?.text)).status;
+      }
+      expect(finalStatus).toBe("completed");
     } finally {
       await client.close();
       await server.close();

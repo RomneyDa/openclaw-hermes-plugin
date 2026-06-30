@@ -28,6 +28,13 @@ export type HermesSkillSummary = {
   available: boolean;
 };
 
+export type HermesAuxiliaryTaskSummary = {
+  key: string;
+  displayName: string;
+  description: string;
+  defaults: unknown;
+};
+
 export type HermesPluginSummary = {
   key: string;
   name: string;
@@ -38,7 +45,9 @@ export type HermesPluginSummary = {
   hooks: string[];
   middleware: string[];
   commands: HermesCommandSummary[];
+  cliCommands: HermesCommandSummary[];
   skills: HermesSkillSummary[];
+  auxiliaryTasks: HermesAuxiliaryTaskSummary[];
   unsupported: string[];
   error?: string;
 };
@@ -59,6 +68,8 @@ export type HermesCommandResult = {
   plugin: string;
   command: string;
   result: unknown;
+  stdout?: string;
+  stderr?: string;
 };
 
 export type HermesSkillResult = {
@@ -68,13 +79,75 @@ export type HermesSkillResult = {
   text: string;
 };
 
+export type HermesHookResult = {
+  hook: string;
+  invoked: Array<{ plugin: string; hook: string }>;
+  results: unknown[];
+};
+
+export type HermesMiddlewareResult = {
+  middleware: string;
+  invoked: Array<{ plugin: string; middleware: string }>;
+  results: unknown[];
+};
+
+export type HermesRuntimeContext = {
+  workspace?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  agentId?: string;
+  model?: string;
+  provider?: string;
+  env?: Record<string, string>;
+};
+
 type BridgeRequest =
   | { op: "list"; installDir: string }
-  | { op: "call"; installDir: string; plugin?: string; tool: string; args: unknown }
-  | { op: "command"; installDir: string; plugin?: string; command: string; args: unknown }
-  | { op: "skill"; installDir: string; plugin?: string; skill: string };
+  | {
+      op: "call";
+      installDir: string;
+      plugin?: string;
+      tool: string;
+      args: unknown;
+      context?: HermesRuntimeContext;
+    }
+  | {
+      op: "command";
+      installDir: string;
+      plugin?: string;
+      command: string;
+      args: unknown;
+      context?: HermesRuntimeContext;
+    }
+  | {
+      op: "cliCommand";
+      installDir: string;
+      plugin?: string;
+      command: string;
+      args: string[];
+      context?: HermesRuntimeContext;
+    }
+  | { op: "skill"; installDir: string; plugin?: string; skill: string }
+  | {
+      op: "hook";
+      installDir: string;
+      hook: string;
+      kwargs: Record<string, unknown>;
+      context?: HermesRuntimeContext;
+    }
+  | {
+      op: "middleware";
+      installDir: string;
+      kind: string;
+      kwargs: Record<string, unknown>;
+      context?: HermesRuntimeContext;
+    };
 
-function runHelper<T>(config: HermesBridgeConfig, request: BridgeRequest): Promise<T> {
+function runHelper<T>(
+  config: HermesBridgeConfig,
+  request: BridgeRequest,
+  options: { signal?: AbortSignal } = {},
+): Promise<T> {
   return new Promise((resolve, reject) => {
     const child = spawn(config.python, [helperPath], {
       env: { ...process.env, ...config.env },
@@ -85,6 +158,11 @@ function runHelper<T>(config: HermesBridgeConfig, request: BridgeRequest): Promi
       child.kill("SIGTERM");
       reject(new Error(`Hermes Python bridge timed out after ${config.timeoutMs}ms`));
     }, config.timeoutMs);
+    const abort = () => {
+      child.kill("SIGTERM");
+      reject(new Error("Hermes Python bridge call cancelled"));
+    };
+    options.signal?.addEventListener("abort", abort, { once: true });
 
     let stdout = "";
     let stderr = "";
@@ -98,10 +176,15 @@ function runHelper<T>(config: HermesBridgeConfig, request: BridgeRequest): Promi
     });
     child.on("error", (error) => {
       clearTimeout(timer);
+      options.signal?.removeEventListener("abort", abort);
       reject(error);
     });
     child.on("close", (code) => {
       clearTimeout(timer);
+      options.signal?.removeEventListener("abort", abort);
+      if (options.signal?.aborted) {
+        return;
+      }
       if (code !== 0) {
         reject(new Error(stderr.trim() || `Hermes Python bridge exited with ${code}`));
         return;
@@ -123,7 +206,8 @@ export function listHermesPlugins(config: HermesBridgeConfig): Promise<HermesLis
 
 export function callHermesTool(
   config: HermesBridgeConfig,
-  params: { plugin?: string; tool: string; args: unknown },
+  params: { plugin?: string; tool: string; args: unknown; context?: HermesRuntimeContext },
+  options?: { signal?: AbortSignal },
 ): Promise<HermesCallResult> {
   return runHelper(config, {
     op: "call",
@@ -131,12 +215,14 @@ export function callHermesTool(
     plugin: params.plugin,
     tool: params.tool,
     args: params.args,
-  });
+    context: params.context,
+  }, options);
 }
 
 export function callHermesCommand(
   config: HermesBridgeConfig,
-  params: { plugin?: string; command: string; args: unknown },
+  params: { plugin?: string; command: string; args: unknown; context?: HermesRuntimeContext },
+  options?: { signal?: AbortSignal },
 ): Promise<HermesCommandResult> {
   return runHelper(config, {
     op: "command",
@@ -144,7 +230,23 @@ export function callHermesCommand(
     plugin: params.plugin,
     command: params.command,
     args: params.args,
-  });
+    context: params.context,
+  }, options);
+}
+
+export function callHermesCliCommand(
+  config: HermesBridgeConfig,
+  params: { plugin?: string; command: string; args: string[]; context?: HermesRuntimeContext },
+  options?: { signal?: AbortSignal },
+): Promise<HermesCommandResult> {
+  return runHelper(config, {
+    op: "cliCommand",
+    installDir: config.installDir,
+    plugin: params.plugin,
+    command: params.command,
+    args: params.args,
+    context: params.context,
+  }, options);
 }
 
 export function readHermesSkill(
@@ -156,5 +258,31 @@ export function readHermesSkill(
     installDir: config.installDir,
     plugin: params.plugin,
     skill: params.skill,
+  });
+}
+
+export function invokeHermesHook(
+  config: HermesBridgeConfig,
+  params: { hook: string; kwargs: Record<string, unknown>; context?: HermesRuntimeContext },
+): Promise<HermesHookResult> {
+  return runHelper(config, {
+    op: "hook",
+    installDir: config.installDir,
+    hook: params.hook,
+    kwargs: params.kwargs,
+    context: params.context,
+  });
+}
+
+export function invokeHermesMiddleware(
+  config: HermesBridgeConfig,
+  params: { kind: string; kwargs: Record<string, unknown>; context?: HermesRuntimeContext },
+): Promise<HermesMiddlewareResult> {
+  return runHelper(config, {
+    op: "middleware",
+    installDir: config.installDir,
+    kind: params.kind,
+    kwargs: params.kwargs,
+    context: params.context,
   });
 }

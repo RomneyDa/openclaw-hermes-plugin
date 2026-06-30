@@ -3229,8 +3229,8 @@ var require_utils = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path4) {
-      let input = path4;
+    function removeDotSegments(path5) {
+      let input = path5;
       const output = [];
       let nextSlash = -1;
       let len = 0;
@@ -3482,8 +3482,8 @@ var require_schemes = __commonJS({
         wsComponent.secure = void 0;
       }
       if (wsComponent.resourceName) {
-        const [path4, query] = wsComponent.resourceName.split("?");
-        wsComponent.path = path4 && path4 !== "/" ? path4 : void 0;
+        const [path5, query] = wsComponent.resourceName.split("?");
+        wsComponent.path = path5 && path5 !== "/" ? path5 : void 0;
         wsComponent.query = query;
         wsComponent.resourceName = void 0;
       }
@@ -6982,12 +6982,24 @@ async function installHermesPlugin({
   });
   return { name: pluginName, path: target };
 }
+async function uninstallHermesPlugin({
+  installDir,
+  name
+}) {
+  const pluginName = sanitizePluginName(name);
+  const target = path2.join(installDir, pluginName);
+  if (!await pathExists(target)) {
+    throw new Error(`Hermes plugin '${pluginName}' is not installed.`);
+  }
+  await fs.rm(target, { recursive: true, force: true });
+  return { name: pluginName, path: target };
+}
 
 // src/hermes-python.ts
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 var helperPath = fileURLToPath(new URL("../python/hermes_openclaw_bridge.py", import.meta.url));
-function runHelper(config2, request) {
+function runHelper(config2, request, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(config2.python, [helperPath], {
       env: { ...process.env, ...config2.env },
@@ -6997,6 +7009,11 @@ function runHelper(config2, request) {
       child.kill("SIGTERM");
       reject(new Error(`Hermes Python bridge timed out after ${config2.timeoutMs}ms`));
     }, config2.timeoutMs);
+    const abort = () => {
+      child.kill("SIGTERM");
+      reject(new Error("Hermes Python bridge call cancelled"));
+    };
+    options.signal?.addEventListener("abort", abort, { once: true });
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8");
@@ -7009,10 +7026,15 @@ function runHelper(config2, request) {
     });
     child.on("error", (error2) => {
       clearTimeout(timer);
+      options.signal?.removeEventListener("abort", abort);
       reject(error2);
     });
     child.on("close", (code) => {
       clearTimeout(timer);
+      options.signal?.removeEventListener("abort", abort);
+      if (options.signal?.aborted) {
+        return;
+      }
       if (code !== 0) {
         reject(new Error(stderr.trim() || `Hermes Python bridge exited with ${code}`));
         return;
@@ -7029,23 +7051,25 @@ function runHelper(config2, request) {
 function listHermesPlugins(config2) {
   return runHelper(config2, { op: "list", installDir: config2.installDir });
 }
-function callHermesTool(config2, params) {
+function callHermesTool(config2, params, options) {
   return runHelper(config2, {
     op: "call",
     installDir: config2.installDir,
     plugin: params.plugin,
     tool: params.tool,
-    args: params.args
-  });
+    args: params.args,
+    context: params.context
+  }, options);
 }
-function callHermesCommand(config2, params) {
+function callHermesCommand(config2, params, options) {
   return runHelper(config2, {
     op: "command",
     installDir: config2.installDir,
     plugin: params.plugin,
     command: params.command,
-    args: params.args
-  });
+    args: params.args,
+    context: params.context
+  }, options);
 }
 function readHermesSkill(config2, params) {
   return runHelper(config2, {
@@ -7296,10 +7320,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path4) {
-  if (!path4)
+function getElementAtPath(obj, path5) {
+  if (!path5)
     return obj;
-  return path4.reduce((acc, key) => acc?.[key], obj);
+  return path5.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -7708,11 +7732,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path4, issues) {
+function prefixIssues(path5, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path4);
+    iss.path.unshift(path5);
     return iss;
   });
 }
@@ -7859,16 +7883,16 @@ function flattenError(error2, mapper = (issue2) => issue2.message) {
 }
 function formatError(error2, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error3, path4 = []) => {
+  const processError = (error3, path5 = []) => {
     for (const issue2 of error3.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path4, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path5, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path4, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path5, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path4, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path5, ...issue2.path]);
       } else {
-        const fullpath = [...path4, ...issue2.path];
+        const fullpath = [...path5, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -13967,9 +13991,9 @@ var Protocol = class {
       });
       this.setRequestHandler(ListTasksRequestSchema, async (request, extra) => {
         try {
-          const { tasks, nextCursor } = await this._taskStore.listTasks(request.params?.cursor, extra.sessionId);
+          const { tasks: tasks2, nextCursor } = await this._taskStore.listTasks(request.params?.cursor, extra.sessionId);
           return {
-            tasks,
+            tasks: tasks2,
             nextCursor,
             _meta: {}
           };
@@ -15616,6 +15640,11 @@ var StdioServerTransport = class {
   }
 };
 
+// src/native-tools.ts
+import fsp from "node:fs/promises";
+import path4 from "node:path";
+import { fileURLToPath as fileURLToPath3 } from "node:url";
+
 // src/skill-sync.ts
 import fs2 from "node:fs/promises";
 import path3 from "node:path";
@@ -15642,15 +15671,22 @@ function skillMarkdown(params) {
 }
 async function syncHermesSkills(config2, rootDir = packageRoot()) {
   const list = await listHermesPlugins(config2);
+  const generatedRoot = path3.join(rootDir, "skills", "hermes-generated");
+  const desired = /* @__PURE__ */ new Set();
   const written = [];
   for (const plugin of list.plugins) {
     for (const skill of plugin.skills) {
       if (!skill.available) {
         continue;
       }
-      const name = `hermes-${slug(plugin.key)}-${slug(skill.name)}`;
+      const baseName = `hermes-${slug(plugin.key)}-${slug(skill.name)}`;
+      let name = baseName;
+      for (let index = 2; desired.has(name); index += 1) {
+        name = `${baseName}-${index}`;
+      }
+      desired.add(name);
       const loaded = await readHermesSkill(config2, { plugin: plugin.key, skill: skill.name });
-      const dir = path3.join(rootDir, "skills", "hermes-generated", name);
+      const dir = path3.join(generatedRoot, name);
       await fs2.mkdir(dir, { recursive: true });
       await fs2.writeFile(
         path3.join(dir, "SKILL.md"),
@@ -15666,11 +15702,23 @@ async function syncHermesSkills(config2, rootDir = packageRoot()) {
       written.push(name);
     }
   }
+  await fs2.mkdir(generatedRoot, { recursive: true });
+  for (const entry of await fs2.readdir(generatedRoot, { withFileTypes: true })) {
+    if (entry.isDirectory() && !desired.has(entry.name)) {
+      await fs2.rm(path3.join(generatedRoot, entry.name), { recursive: true, force: true });
+    }
+  }
   return written;
 }
 
-// src/mcp-server.ts
-var BRIDGE_TOOL_NAMES = /* @__PURE__ */ new Set(["hermes_plugins_list", "hermes_plugin_install"]);
+// src/native-tools.ts
+var packageRoot2 = fileURLToPath3(new URL("..", import.meta.url));
+var generatedRegistryFile = "hermes-tools.generated.json";
+var NATIVE_BRIDGE_TOOL_NAMES = [
+  "hermes_plugins_list",
+  "hermes_plugin_install",
+  "hermes_plugin_uninstall"
+];
 function asObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : void 0;
 }
@@ -15689,6 +15737,158 @@ function inputSchemaFor(tool) {
   }
   return { type: "object", additionalProperties: true };
 }
+function generatedToolName(params) {
+  if (!params.duplicates.has(params.tool) && !NATIVE_BRIDGE_TOOL_NAMES.includes(params.tool)) {
+    return params.tool;
+  }
+  return `${sanitizeName(params.plugin)}__${sanitizeName(params.tool)}`;
+}
+function uniqueName(base, used) {
+  let candidate = base;
+  let suffix = 2;
+  while (used.has(candidate)) {
+    candidate = `${base}_${suffix}`;
+    suffix += 1;
+  }
+  used.add(candidate);
+  return candidate;
+}
+function commandBaseName(command) {
+  return sanitizeName(command).replace(/^[^A-Za-z]+/, "").toLowerCase();
+}
+function commandName(params) {
+  const cleaned = commandBaseName(params.command);
+  const fallback = `hermes_${sanitizeName(params.plugin)}_${sanitizeName(params.command)}`.toLowerCase();
+  const base = cleaned || fallback;
+  if (!params.duplicates.has(base)) {
+    return base;
+  }
+  return fallback;
+}
+function buildNativeToolEntries(list) {
+  const counts = /* @__PURE__ */ new Map();
+  for (const plugin of list.plugins) {
+    for (const tool of plugin.tools) {
+      if (tool.available) {
+        counts.set(tool.name, (counts.get(tool.name) ?? 0) + 1);
+      }
+    }
+  }
+  const duplicates = new Set(
+    [...counts.entries()].filter(([, count]) => count > 1).map(([name]) => name)
+  );
+  const entries = [];
+  const usedNames = new Set(NATIVE_BRIDGE_TOOL_NAMES);
+  for (const plugin of list.plugins) {
+    for (const tool of plugin.tools) {
+      if (!tool.available) {
+        continue;
+      }
+      entries.push({
+        kind: "tool",
+        name: uniqueName(
+          generatedToolName({ plugin: plugin.key, tool: tool.name, duplicates }),
+          usedNames
+        ),
+        plugin: plugin.key,
+        originalName: tool.name,
+        description: tool.description || `Hermes ${plugin.key}/${tool.name}`,
+        inputSchema: inputSchemaFor(tool)
+      });
+    }
+  }
+  return entries.sort((a, b) => a.name.localeCompare(b.name));
+}
+function buildCommandEntries(list, select) {
+  const counts = /* @__PURE__ */ new Map();
+  for (const plugin of list.plugins) {
+    for (const command of select(plugin)) {
+      if (command.available) {
+        const key = commandBaseName(command.name) || `${plugin.key}/${command.name}`;
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+      }
+    }
+  }
+  const duplicates = new Set(
+    [...counts.entries()].filter(([, count]) => count > 1).map(([name]) => name)
+  );
+  const usedNames = /* @__PURE__ */ new Set();
+  return list.plugins.flatMap(
+    (plugin) => select(plugin).filter((entry) => entry.available).map((entry) => ({
+      name: uniqueName(
+        commandName({ plugin: plugin.key, command: entry.name, duplicates }),
+        usedNames
+      ),
+      plugin: plugin.key,
+      originalName: entry.name,
+      description: entry.description || `Run Hermes command ${plugin.key}/${entry.name}`,
+      argsHint: entry.argsHint
+    }))
+  ).sort((a, b) => a.name.localeCompare(b.name));
+}
+function registryPath(root = packageRoot2) {
+  return path4.join(root, generatedRegistryFile);
+}
+function manifestPath(root = packageRoot2) {
+  return path4.join(root, "openclaw.plugin.json");
+}
+async function writeManifestTools(names, root) {
+  const target = manifestPath(root);
+  const manifest = JSON.parse(await fsp.readFile(target, "utf8"));
+  const contracts = asObject(manifest.contracts) ?? {};
+  contracts.tools = names;
+  manifest.contracts = contracts;
+  await fsp.writeFile(target, `${JSON.stringify(manifest, null, 2)}
+`);
+}
+async function regenerateNativeTools(config2, options = {}) {
+  const root = options.root ?? packageRoot2;
+  const list = await listHermesPlugins(config2);
+  const tools = buildNativeToolEntries(list);
+  const commands = buildCommandEntries(list, (plugin) => plugin.commands);
+  const cliCommands = buildCommandEntries(list, (plugin) => plugin.cliCommands ?? []);
+  const registry2 = {
+    generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    installDir: list.installDir,
+    tools,
+    commands,
+    cliCommands
+  };
+  await fsp.writeFile(registryPath(root), `${JSON.stringify(registry2, null, 2)}
+`);
+  await writeManifestTools([...NATIVE_BRIDGE_TOOL_NAMES, ...tools.map((tool) => tool.name)], root);
+  await syncHermesSkills(config2, root);
+  return { generatedTools: tools.map((tool) => tool.name), restartRequired: true };
+}
+
+// src/mcp-server.ts
+var BRIDGE_TOOL_NAMES = /* @__PURE__ */ new Set([
+  "hermes_plugins_list",
+  "hermes_plugin_install",
+  "hermes_task_start",
+  "hermes_task_status",
+  "hermes_task_stop"
+]);
+var tasks = /* @__PURE__ */ new Map();
+var nextTaskId = 1;
+function asObject2(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : void 0;
+}
+function sanitizeName2(value) {
+  const cleaned = value.replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "");
+  return cleaned || "plugin";
+}
+function inputSchemaFor2(tool) {
+  const schema = asObject2(tool.schema);
+  const parameters = asObject2(schema?.parameters);
+  if (parameters?.type === "object") {
+    return parameters;
+  }
+  if (schema?.type === "object") {
+    return schema;
+  }
+  return { type: "object", additionalProperties: true };
+}
 function stringifyResult(value) {
   return typeof value === "string" ? value : JSON.stringify(value, null, 2);
 }
@@ -15696,10 +15896,10 @@ function mcpToolName(params) {
   if (!params.duplicates.has(params.tool) && !BRIDGE_TOOL_NAMES.has(params.tool)) {
     return params.tool;
   }
-  return `${sanitizeName(params.plugin)}__${sanitizeName(params.tool)}`;
+  return `${sanitizeName2(params.plugin)}__${sanitizeName2(params.tool)}`;
 }
 function commandToolName(plugin, command) {
-  return `hermes_command__${sanitizeName(plugin)}__${sanitizeName(command)}`;
+  return `hermes_command__${sanitizeName2(plugin)}__${sanitizeName2(command)}`;
 }
 function bridgeTools() {
   return [
@@ -15721,6 +15921,41 @@ function bridgeTools() {
         },
         required: ["source"]
       }
+    },
+    {
+      name: "hermes_task_start",
+      description: "Run a Hermes tool or command in the background for later polling.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          kind: { type: "string", enum: ["tool", "command"] },
+          plugin: { type: "string" },
+          name: { type: "string" },
+          args: { description: "Arguments passed to the Hermes tool or command." }
+        },
+        required: ["kind", "name"]
+      }
+    },
+    {
+      name: "hermes_task_status",
+      description: "Return the status and result for a Hermes background task.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: { id: { type: "string" } },
+        required: ["id"]
+      }
+    },
+    {
+      name: "hermes_task_stop",
+      description: "Stop a running Hermes background task.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: { id: { type: "string" } },
+        required: ["id"]
+      }
     }
   ];
 }
@@ -15736,12 +15971,16 @@ function commandTools(list) {
       routes.set(name, { plugin: plugin.key, name: command.name });
       tools.push({
         name,
-        description: command.description || `Run Hermes command ${plugin.key}/${command.name}`,
+        description: [
+          command.description || `Run Hermes command ${plugin.key}/${command.name}`,
+          command.argsHint ? `Args: ${command.argsHint}` : ""
+        ].filter(Boolean).join("\n"),
         inputSchema: {
           type: "object",
           additionalProperties: false,
           properties: {
             args: {
+              type: "string",
               description: command.argsHint || "Arguments passed to the Hermes command handler."
             }
           }
@@ -15780,7 +16019,7 @@ function buildHermesMcpToolIndex(list) {
       tools.push({
         name,
         description: hermesTool.description || `Hermes ${plugin.key}/${hermesTool.name}`,
-        inputSchema: inputSchemaFor(hermesTool),
+        inputSchema: inputSchemaFor2(hermesTool),
         _meta: {
           "hermes/plugin": plugin.key,
           "hermes/tool": hermesTool.name,
@@ -15814,8 +16053,86 @@ function createHermesMcpServer(config2) {
         content: [{ type: "text", text: stringifyResult(await listHermesPlugins(config2)) }]
       };
     }
+    if (request.params.name === "hermes_task_start") {
+      const args = asObject2(request.params.arguments) ?? {};
+      const kind = args.kind === "command" ? "command" : "tool";
+      const name = typeof args.name === "string" ? args.name.trim() : "";
+      if (!name) {
+        return { isError: true, content: [{ type: "text", text: "name is required" }] };
+      }
+      const id = `hermes-task-${nextTaskId++}`;
+      const startedAt = Date.now();
+      const controller = new AbortController();
+      tasks.set(id, { id, status: "running", startedAt, controller });
+      const run = kind === "command" ? callHermesCommand(
+        config2,
+        {
+          plugin: typeof args.plugin === "string" ? args.plugin : void 0,
+          command: name,
+          args: args.args ?? ""
+        },
+        { signal: controller.signal }
+      ) : callHermesTool(
+        config2,
+        {
+          plugin: typeof args.plugin === "string" ? args.plugin : void 0,
+          tool: name,
+          args: args.args ?? {}
+        },
+        { signal: controller.signal }
+      );
+      void run.then(
+        (result) => {
+          if (tasks.get(id)?.status === "running") {
+            tasks.set(id, { id, status: "completed", startedAt, finishedAt: Date.now(), result });
+          }
+        },
+        (error2) => {
+          if (tasks.get(id)?.status === "running") {
+            tasks.set(id, {
+              id,
+              status: "failed",
+              startedAt,
+              finishedAt: Date.now(),
+              error: error2.message
+            });
+          }
+        }
+      );
+      return {
+        content: [{ type: "text", text: stringifyResult({ id, status: "running" }) }],
+        structuredContent: { id, status: "running" }
+      };
+    }
+    if (request.params.name === "hermes_task_status") {
+      const id = String(asObject2(request.params.arguments)?.id ?? "");
+      const task = tasks.get(id);
+      if (!task) {
+        return { isError: true, content: [{ type: "text", text: `Unknown Hermes task: ${id}` }] };
+      }
+      const { controller: _controller, ...safeTask } = task.status === "running" ? task : { ...task, controller: void 0 };
+      return {
+        content: [{ type: "text", text: stringifyResult(safeTask) }],
+        structuredContent: asObject2(safeTask)
+      };
+    }
+    if (request.params.name === "hermes_task_stop") {
+      const id = String(asObject2(request.params.arguments)?.id ?? "");
+      const task = tasks.get(id);
+      if (!task) {
+        return { isError: true, content: [{ type: "text", text: `Unknown Hermes task: ${id}` }] };
+      }
+      if (task.status === "running") {
+        task.controller.abort();
+        tasks.set(id, { id, status: "stopped", startedAt: task.startedAt, finishedAt: Date.now() });
+      }
+      return {
+        content: [{ type: "text", text: stringifyResult(tasks.get(id)) }],
+        structuredContent: asObject2(tasks.get(id))
+      };
+    }
     if (request.params.name === "hermes_plugin_install") {
-      const args = asObject(request.params.arguments) ?? {};
+      const args = asObject2(request.params.arguments) ?? {};
       const source = typeof args.source === "string" ? args.source.trim() : "";
       if (!source) {
         return {
@@ -15829,11 +16146,11 @@ function createHermesMcpServer(config2) {
         name: typeof args.name === "string" ? args.name : void 0,
         force: args.force === true
       });
-      await syncHermesSkills(config2);
+      const generated = await regenerateNativeTools(config2);
       await server.sendToolListChanged();
       return {
-        content: [{ type: "text", text: stringifyResult(result) }],
-        structuredContent: result
+        content: [{ type: "text", text: stringifyResult({ installed: result, ...generated }) }],
+        structuredContent: { installed: result, ...generated }
       };
     }
     const list = await listHermesPlugins(config2);
@@ -15843,11 +16160,11 @@ function createHermesMcpServer(config2) {
       const result = await callHermesCommand(config2, {
         plugin: commandRoute.plugin,
         command: commandRoute.name,
-        args: asObject(request.params.arguments)?.args ?? request.params.arguments ?? ""
+        args: asObject2(request.params.arguments)?.args ?? request.params.arguments ?? ""
       });
       return {
         content: [{ type: "text", text: stringifyResult(result.result) }],
-        structuredContent: asObject(result.result),
+        structuredContent: asObject2(result.result),
         _meta: {
           "hermes/plugin": result.plugin,
           "hermes/command": result.command
@@ -15874,7 +16191,7 @@ function createHermesMcpServer(config2) {
             text: stringifyResult(result.parsedResult ?? result.result)
           }
         ],
-        structuredContent: asObject(result.parsedResult ?? result.result),
+        structuredContent: asObject2(result.parsedResult ?? result.result),
         _meta: {
           "hermes/plugin": result.plugin,
           "hermes/tool": result.tool
@@ -15909,7 +16226,8 @@ function usage() {
     "Usage:",
     "  openclaw-hermes-plugin mcp",
     "  openclaw-hermes-plugin list",
-    "  openclaw-hermes-plugin install <source> [--name <name>] [--force]"
+    "  openclaw-hermes-plugin install <source> [--name <name>] [--force]",
+    "  openclaw-hermes-plugin uninstall <name>"
   ].join("\n");
 }
 async function runHermesPluginCli(args) {
@@ -15938,7 +16256,20 @@ async function runHermesPluginCli(args) {
       name: readOptionValue(args, "--name"),
       force: args.includes("--force")
     });
-    console.log(JSON.stringify(result, null, 2));
+    console.log(
+      JSON.stringify({ installed: result, ...await regenerateNativeTools(config2) }, null, 2)
+    );
+    return;
+  }
+  if (command === "uninstall") {
+    const name = args[1];
+    if (!name || name.startsWith("--")) {
+      throw new Error(usage());
+    }
+    const result = await uninstallHermesPlugin({ installDir: config2.installDir, name });
+    console.log(
+      JSON.stringify({ removed: result, ...await regenerateNativeTools(config2) }, null, 2)
+    );
     return;
   }
   throw new Error(usage());

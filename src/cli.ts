@@ -1,7 +1,8 @@
 import { resolveConfig } from "./config.js";
-import { installHermesPlugin } from "./git-install.js";
+import { installHermesPlugin, uninstallHermesPlugin } from "./git-install.js";
 import { listHermesPlugins } from "./hermes-python.js";
 import { startHermesMcpServer } from "./mcp-server.js";
+import { regenerateNativeTools } from "./native-tools.js";
 
 function readOptionValue(args: string[], name: string): string | undefined {
   const index = args.indexOf(name);
@@ -18,6 +19,7 @@ function usage(): string {
     "  openclaw-hermes-plugin mcp",
     "  openclaw-hermes-plugin list",
     "  openclaw-hermes-plugin install <source> [--name <name>] [--force]",
+    "  openclaw-hermes-plugin uninstall <name>",
   ].join("\n");
 }
 
@@ -50,7 +52,21 @@ export async function runHermesPluginCli(args: string[]): Promise<void> {
       name: readOptionValue(args, "--name"),
       force: args.includes("--force"),
     });
-    console.log(JSON.stringify(result, null, 2));
+    console.log(
+      JSON.stringify({ installed: result, ...(await regenerateNativeTools(config)) }, null, 2),
+    );
+    return;
+  }
+
+  if (command === "uninstall") {
+    const name = args[1];
+    if (!name || name.startsWith("--")) {
+      throw new Error(usage());
+    }
+    const result = await uninstallHermesPlugin({ installDir: config.installDir, name });
+    console.log(
+      JSON.stringify({ removed: result, ...(await regenerateNativeTools(config)) }, null, 2),
+    );
     return;
   }
 
