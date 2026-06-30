@@ -3229,8 +3229,8 @@ var require_utils = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path3) {
-      let input = path3;
+    function removeDotSegments(path4) {
+      let input = path4;
       const output = [];
       let nextSlash = -1;
       let len = 0;
@@ -3482,8 +3482,8 @@ var require_schemes = __commonJS({
         wsComponent.secure = void 0;
       }
       if (wsComponent.resourceName) {
-        const [path3, query] = wsComponent.resourceName.split("?");
-        wsComponent.path = path3 && path3 !== "/" ? path3 : void 0;
+        const [path4, query] = wsComponent.resourceName.split("?");
+        wsComponent.path = path4 && path4 !== "/" ? path4 : void 0;
         wsComponent.query = query;
         wsComponent.resourceName = void 0;
       }
@@ -6876,12 +6876,12 @@ var require_dist = __commonJS({
         throw new Error(`Unknown format "${name}"`);
       return f;
     };
-    function addFormats(ajv, list, fs2, exportName) {
+    function addFormats(ajv, list, fs3, exportName) {
       var _a3;
       var _b;
       (_a3 = (_b = ajv.opts.code).formats) !== null && _a3 !== void 0 ? _a3 : _b.formats = (0, codegen_1._)`require("ajv-formats/dist/formats").${exportName}`;
       for (const f of list)
-        ajv.addFormat(f, fs2[f]);
+        ajv.addFormat(f, fs3[f]);
     }
     module.exports = exports = formatsPlugin;
     Object.defineProperty(exports, "__esModule", { value: true });
@@ -7296,10 +7296,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path3) {
-  if (!path3)
+function getElementAtPath(obj, path4) {
+  if (!path4)
     return obj;
-  return path3.reduce((acc, key) => acc?.[key], obj);
+  return path4.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -7708,11 +7708,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path3, issues) {
+function prefixIssues(path4, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path3);
+    iss.path.unshift(path4);
     return iss;
   });
 }
@@ -7859,16 +7859,16 @@ function flattenError(error2, mapper = (issue2) => issue2.message) {
 }
 function formatError(error2, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error3, path3 = []) => {
+  const processError = (error3, path4 = []) => {
     for (const issue2 of error3.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path3, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path4, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path3, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path4, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path3, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path4, ...issue2.path]);
       } else {
-        const fullpath = [...path3, ...issue2.path];
+        const fullpath = [...path4, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -15616,13 +15616,61 @@ var StdioServerTransport = class {
   }
 };
 
+// src/skill-sync.ts
+import fs2 from "node:fs/promises";
+import path3 from "node:path";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
+function packageRoot() {
+  return path3.dirname(path3.dirname(fileURLToPath2(import.meta.url)));
+}
+function slug(value) {
+  return value.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/-+/g, "-").replace(/^-+|-+$/g, "") || "hermes";
+}
+function yamlString(value) {
+  return JSON.stringify(value);
+}
+function skillMarkdown(params) {
+  return [
+    "---",
+    `name: ${params.name}`,
+    `description: ${yamlString(params.description || `Hermes skill ${params.plugin}/${params.skill}`)}`,
+    "---",
+    "",
+    params.text,
+    ""
+  ].join("\n");
+}
+async function syncHermesSkills(config2, rootDir = packageRoot()) {
+  const list = await listHermesPlugins(config2);
+  const written = [];
+  for (const plugin of list.plugins) {
+    for (const skill of plugin.skills) {
+      if (!skill.available) {
+        continue;
+      }
+      const name = `hermes-${slug(plugin.key)}-${slug(skill.name)}`;
+      const loaded = await readHermesSkill(config2, { plugin: plugin.key, skill: skill.name });
+      const dir = path3.join(rootDir, "skills", "hermes-generated", name);
+      await fs2.mkdir(dir, { recursive: true });
+      await fs2.writeFile(
+        path3.join(dir, "SKILL.md"),
+        skillMarkdown({
+          name,
+          description: loaded.description || skill.description,
+          plugin: plugin.key,
+          skill: skill.name,
+          text: loaded.text
+        }),
+        "utf-8"
+      );
+      written.push(name);
+    }
+  }
+  return written;
+}
+
 // src/mcp-server.ts
-var BRIDGE_TOOL_NAMES = /* @__PURE__ */ new Set([
-  "hermes_plugins_list",
-  "hermes_plugin_install",
-  "hermes_skill_read"
-]);
-var SKILL_URI_PREFIX = "hermes-skill://";
+var BRIDGE_TOOL_NAMES = /* @__PURE__ */ new Set(["hermes_plugins_list", "hermes_plugin_install"]);
 function asObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : void 0;
 }
@@ -15653,12 +15701,6 @@ function mcpToolName(params) {
 function commandToolName(plugin, command) {
   return `hermes_command__${sanitizeName(plugin)}__${sanitizeName(command)}`;
 }
-function skillName(plugin, skill) {
-  return `${sanitizeName(plugin)}__${sanitizeName(skill)}`;
-}
-function skillUri(plugin, skill) {
-  return `${SKILL_URI_PREFIX}${encodeURIComponent(plugin)}/${encodeURIComponent(skill)}`;
-}
 function bridgeTools() {
   return [
     {
@@ -15678,19 +15720,6 @@ function bridgeTools() {
           force: { type: "boolean", description: "Replace an existing install." }
         },
         required: ["source"]
-      }
-    },
-    {
-      name: "hermes_skill_read",
-      description: "Read a skill registered by an installed Hermes Agent Python plugin.",
-      inputSchema: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          plugin: { type: "string", description: "Hermes plugin key/name." },
-          skill: { type: "string", description: "Hermes skill name." }
-        },
-        required: ["skill"]
       }
     }
   ];
@@ -15766,86 +15795,18 @@ function buildHermesMcpToolIndex(list) {
   const commands = commandTools(list);
   return { tools: [...commands.tools, ...tools], toolRoutes, commandRoutes: commands.routes };
 }
-function skillEntries(list) {
-  const routes = /* @__PURE__ */ new Map();
-  const uriRoutes = /* @__PURE__ */ new Map();
-  const prompts = [];
-  const resources = [];
-  for (const plugin of list.plugins) {
-    for (const skill of plugin.skills) {
-      if (!skill.available) {
-        continue;
-      }
-      const name = skillName(plugin.key, skill.name);
-      const uri = skillUri(plugin.key, skill.name);
-      routes.set(name, { plugin: plugin.key, name: skill.name });
-      uriRoutes.set(uri, { plugin: plugin.key, name: skill.name });
-      prompts.push({
-        name,
-        title: skill.name,
-        description: skill.description || `Hermes skill ${plugin.key}/${skill.name}`,
-        _meta: { "hermes/plugin": plugin.key, "hermes/skill": skill.name }
-      });
-      resources.push({
-        uri,
-        name,
-        title: skill.name,
-        description: skill.description || `Hermes skill ${plugin.key}/${skill.name}`,
-        mimeType: "text/markdown",
-        _meta: { "hermes/plugin": plugin.key, "hermes/skill": skill.name }
-      });
-    }
-  }
-  prompts.sort((a, b) => a.name.localeCompare(b.name));
-  resources.sort((a, b) => a.name.localeCompare(b.name));
-  return { prompts, resources, routes, uriRoutes };
-}
-async function readSkillByRoute(config2, route) {
-  return await readHermesSkill(config2, { plugin: route.plugin, skill: route.name });
-}
 function createHermesMcpServer(config2) {
   const server = new Server(
     { name: "openclaw-hermes-plugin", version: "0.1.0" },
     {
       capabilities: {
-        tools: { listChanged: true },
-        prompts: { listChanged: true },
-        resources: { listChanged: true }
+        tools: { listChanged: true }
       }
     }
   );
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     const index = buildHermesMcpToolIndex(await listHermesPlugins(config2));
     return { tools: [...bridgeTools(), ...index.tools] };
-  });
-  server.setRequestHandler(ListPromptsRequestSchema, async () => {
-    return { prompts: skillEntries(await listHermesPlugins(config2)).prompts };
-  });
-  server.setRequestHandler(GetPromptRequestSchema, async (request) => {
-    const entries = skillEntries(await listHermesPlugins(config2));
-    const route = entries.routes.get(request.params.name);
-    if (!route) {
-      throw new Error(`Unknown Hermes skill prompt: ${request.params.name}`);
-    }
-    const skill = await readSkillByRoute(config2, route);
-    return {
-      description: skill.description,
-      messages: [{ role: "user", content: { type: "text", text: skill.text } }]
-    };
-  });
-  server.setRequestHandler(ListResourcesRequestSchema, async () => {
-    return { resources: skillEntries(await listHermesPlugins(config2)).resources };
-  });
-  server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
-    const entries = skillEntries(await listHermesPlugins(config2));
-    const route = entries.uriRoutes.get(request.params.uri);
-    if (!route) {
-      throw new Error(`Unknown Hermes skill resource: ${request.params.uri}`);
-    }
-    const skill = await readSkillByRoute(config2, route);
-    return {
-      contents: [{ uri: request.params.uri, mimeType: "text/markdown", text: skill.text }]
-    };
   });
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (request.params.name === "hermes_plugins_list") {
@@ -15868,26 +15829,10 @@ function createHermesMcpServer(config2) {
         name: typeof args.name === "string" ? args.name : void 0,
         force: args.force === true
       });
+      await syncHermesSkills(config2);
       await server.sendToolListChanged();
-      await server.sendPromptListChanged();
-      await server.sendResourceListChanged();
       return {
         content: [{ type: "text", text: stringifyResult(result) }],
-        structuredContent: result
-      };
-    }
-    if (request.params.name === "hermes_skill_read") {
-      const args = asObject(request.params.arguments) ?? {};
-      const skillNameArg = typeof args.skill === "string" ? args.skill.trim() : "";
-      if (!skillNameArg) {
-        return { isError: true, content: [{ type: "text", text: "skill is required" }] };
-      }
-      const result = await readHermesSkill(config2, {
-        plugin: typeof args.plugin === "string" ? args.plugin : void 0,
-        skill: skillNameArg
-      });
-      return {
-        content: [{ type: "text", text: result.text }],
         structuredContent: result
       };
     }
@@ -15945,6 +15890,7 @@ function createHermesMcpServer(config2) {
   return server;
 }
 async function startHermesMcpServer(config2) {
+  await syncHermesSkills(config2);
   const server = createHermesMcpServer(config2);
   await server.connect(new StdioServerTransport());
 }
